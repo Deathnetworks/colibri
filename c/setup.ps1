@@ -4,23 +4,26 @@ Write-Host "🐦 colibrì — setup (Windows 11)"
 
 $ErrorActionPreference = "Stop"
 
+$cc = if ($env:CC) { $env:CC -replace '^"|"$','' } else { "gcc" }
+$make_cmd = if ($env:MAKE) { $env:MAKE -replace '^"|"$','' } else { "make" }
+
 # 1) Dependencies
-$gcc = Get-Command "gcc" -ErrorAction SilentlyContinue
+$gcc = Get-Command $cc -ErrorAction SilentlyContinue
 if (-not $gcc) {
-    Write-Error "gcc is missing (MinGW-w64). Install via scoop (scoop install mingw-winlibs) or MSYS2."
+    Write-Error "Compiler ($cc) is missing. Install via scoop (scoop install mingw-winlibs) or MSYS2."
 }
-$make = Get-Command "make" -ErrorAction SilentlyContinue
+$make = Get-Command $make_cmd -ErrorAction SilentlyContinue
 if (-not $make) {
-    Write-Error "make is missing. Install via scoop (scoop install make) or MSYS2."
+    Write-Error "Make ($make_cmd) is missing. Install via scoop (scoop install make) or MSYS2."
 }
 
-$gccVer = (& gcc -dumpversion)
+$gccVer = (& $cc -dumpversion)
 Write-Host "  gcc: $gccVer"
 
 Write-Host -NoNewline "  OpenMP: "
 $tempCode = "int main(){return 0;}"
 Set-Content -Path "_omp.c" -Value $tempCode
-$ompTest = (Start-Process -FilePath "gcc" -ArgumentList "-fopenmp", "_omp.c", "-o", "_omp.exe" -PassThru -Wait -NoNewWindow)
+$ompTest = (Start-Process -FilePath $cc -ArgumentList "-fopenmp", "_omp.c", "-o", "_omp.exe" -PassThru -Wait -NoNewWindow)
 if ($ompTest.ExitCode -eq 0) {
     Write-Host "ok"
 } else {
@@ -31,7 +34,7 @@ if (Test-Path "_omp.exe") { Remove-Item "_omp.exe" }
 
 # 2) Build
 Write-Host "  building engine (ARCH=native)..."
-& make -s glm ARCH="native"
+& $make_cmd -s glm ARCH="native"
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Build failed."
 }
