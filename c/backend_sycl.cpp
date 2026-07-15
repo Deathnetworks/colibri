@@ -25,7 +25,7 @@ namespace sycl {
 
 // Stub implementation for now. The plan specifically highlights silu_mul.
 
-struct ColiSyclTensor {
+struct ColiCudaTensor {
     void *weights;
     float *scales;
     size_t weight_bytes;
