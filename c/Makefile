@@ -215,23 +215,18 @@ backend_loader.o: backend_loader.c backend_cuda.h compat.h
 
 # SYCL DLL build (for Windows, via Intel oneAPI icpx)
 sycl-dll: backend_sycl.cpp backend_sycl.h
-	@command -v icpx >/dev/null 2>&1 || { echo "icpx not found: set up oneAPI environment first (setvars.bat)" >&2; exit 1; }
 	icpx -fsycl -O3 -shared -DCOLI_SYCL_BUILDING_DLL backend_sycl.cpp -o coli_sycl.dll
 
 # Vulkan DLL build (for Windows, via MSVC cl)
 vulkan-dll: backend_vulkan.cpp backend_vulkan.h
-	@command -v cl >/dev/null 2>&1 || { echo "cl.exe not found: run vcvars64.bat first" >&2; exit 1; }
 	cl.exe /O2 /LD /DCOLI_VULKAN_BUILDING_DLL backend_vulkan.cpp /link /OUT:coli_vulkan.dll /LIBPATH:"$$(VULKAN_SDK)/lib" vulkan-1.lib
 
 cuda-dll: backend_cuda.cu backend_cuda.h
-	@command -v $(NVCC) >/dev/null 2>&1 || { echo "nvcc not found: set CUDA_HOME or NVCC" >&2; exit 1; }
-	@command -v cl >/dev/null 2>&1 || { echo "cl.exe (MSVC) not in PATH — run vcvars64.bat first" >&2; exit 1; }
 	$(NVCC) $(NVCCFLAGS) -shared -DCOLI_CUDA_BUILDING_DLL \
 		-L"$(CUDA_HOME)/lib/x64" -lcudart \
 		backend_cuda.cu -o coli_cuda.dll
 
 backend_cuda.o: backend_cuda.cu backend_cuda.h
-	@command -v $(NVCC) >/dev/null 2>&1 || { echo "nvcc not found: set CUDA_HOME or NVCC" >&2; exit 1; }
 	$(NVCC) $(NVCCFLAGS) -c backend_cuda.cu -o $@
 
 backend_metal.o: backend_metal.mm backend_metal.h
@@ -242,12 +237,10 @@ metal-test: tests/test_backend_metal.mm backend_metal.mm backend_metal.h
 	./backend_metal_test
 
 cuda-test: backend_cuda.cu backend_cuda.h tests/test_backend_cuda.cu
-	@command -v $(NVCC) >/dev/null 2>&1 || { echo "nvcc not found: set CUDA_HOME or NVCC" >&2; exit 1; }
 	$(NVCC) $(NVCCFLAGS) backend_cuda.cu tests/test_backend_cuda.cu -o backend_cuda_test$(EXE)
 	./backend_cuda_test$(EXE)
 
 cuda-bench: backend_cuda.cu backend_cuda.h tests/bench_tensor_core.cu
-	@command -v $(NVCC) >/dev/null 2>&1 || { echo "nvcc not found: set CUDA_HOME or NVCC" >&2; exit 1; }
 	$(NVCC) $(NVCCFLAGS) backend_cuda.cu tests/bench_tensor_core.cu -o backend_cuda_bench$(EXE)
 	./backend_cuda_bench$(EXE)
 
