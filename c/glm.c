@@ -53,6 +53,7 @@ static inline int omp_get_thread_num(void){ return 0; }
 #define COLI_CUDA 1
 #include "backend_sycl.h"
 #define ColiCudaTensor ColiSyclTensor
+#define COLI_CUDA_MAX_DEVICES COLI_SYCL_MAX_DEVICES
 #define coli_cuda_init coli_sycl_init
 #define coli_cuda_shutdown coli_sycl_shutdown
 #define coli_cuda_device_count coli_sycl_device_count
@@ -264,8 +265,8 @@ static double g_cuda_expert_gb;
 static int g_cuda_expert_auto;
 static int g_cuda_dense;
 static int g_cuda_release_host;
-static int g_cuda_devices[COLI_CUDA_MAX_DEVICES], g_cuda_ndev, g_cuda_rr;
-static int64_t g_cuda_dense_projected[COLI_CUDA_MAX_DEVICES];
+static int g_cuda_devices[COLI_CUDA_MAX_DEVICES] __attribute__((unused)), g_cuda_ndev __attribute__((unused)), g_cuda_rr __attribute__((unused));
+static int64_t g_cuda_dense_projected[COLI_CUDA_MAX_DEVICES] __attribute__((unused));
 static void qt_cuda_reset(QT *t){
     if(t->cuda){ coli_cuda_tensor_free(t->cuda); t->cuda=NULL; }
     t->cuda_failed=0;
@@ -1200,7 +1201,7 @@ static QT qt_load(Model *m, const char *name, int O, int I, int bits){
 #ifdef COLI_CUDA
     if(g_cuda_enabled&&g_cuda_dense){
         t.cuda_eligible=1;
-        int slot=g_cuda_rr++%g_cuda_ndev; t.cuda_device=g_cuda_devices[slot];
+        int slot=g_cuda_rr++%g_cuda_ndev; t.cuda_device=g_cuda_devices[slot]; (void)slot;
         g_cuda_dense_projected[slot]+=qt_bytes(&t);
     }
 #endif
@@ -2654,18 +2655,18 @@ static void moe(Model *m, Layer *l, int layer, float *x, int S, float *out, int 
             m->t_emm += now_s()-t0;
         }
 #ifdef COLI_CUDA
-        ColiCudaTensor *dev_g[COLI_CUDA_MAX_DEVICES][64],*dev_u[COLI_CUDA_MAX_DEVICES][64];
-        ColiCudaTensor *dev_d[COLI_CUDA_MAX_DEVICES][64];
-        int dev_rows[COLI_CUDA_MAX_DEVICES][64],dev_which[COLI_CUDA_MAX_DEVICES][64];
-        int dev_nc[COLI_CUDA_MAX_DEVICES]={0},dev_total[COLI_CUDA_MAX_DEVICES]={0};
-        int dev_off[COLI_CUDA_MAX_DEVICES]={0},dev_ok[COLI_CUDA_MAX_DEVICES]={0};
+        ColiCudaTensor *dev_g[COLI_CUDA_MAX_DEVICES][64],*dev_u[COLI_CUDA_MAX_DEVICES][64]; (void)dev_g; (void)dev_u;
+        ColiCudaTensor *dev_d[COLI_CUDA_MAX_DEVICES][64]; (void)dev_d;
+        int dev_rows[COLI_CUDA_MAX_DEVICES][64],dev_which[COLI_CUDA_MAX_DEVICES][64]; (void)dev_rows; (void)dev_which;
+        int dev_nc[COLI_CUDA_MAX_DEVICES]={0},dev_total[COLI_CUDA_MAX_DEVICES]={0}; (void)dev_nc; (void)dev_total;
+        int dev_off[COLI_CUDA_MAX_DEVICES]={0},dev_ok[COLI_CUDA_MAX_DEVICES]={0}; (void)dev_off; (void)dev_ok;
         for(int di=0;di<g_cuda_ndev;di++) for(int q=0;q<ngroup;q++)
             if(group_e[q]->g.cuda_device==g_cuda_devices[di]) dev_total[di]+=group_n[q];
         for(int di=1;di<g_cuda_ndev;di++) dev_off[di]=dev_off[di-1]+dev_total[di-1];
         for(int di=0;di<g_cuda_ndev;di++){
             int cursor=0,device=g_cuda_devices[di];
             for(int q=0;q<ngroup;q++) if(group_e[q]->g.cuda_device==device){
-                int nc=dev_nc[di]++; ESlot *e=group_e[q];
+                int nc=dev_nc[di]++; ESlot *e=group_e[q]; (void)nc;
                 dev_g[di][nc]=e->g.cuda; dev_u[di][nc]=e->u.cuda; dev_d[di][nc]=e->d.cuda;
                 dev_rows[di][nc]=group_n[q]; dev_which[di][nc]=q;
                 for(int r=0;r<group_n[q];r++) memcpy(group_x+(int64_t)(dev_off[di]+cursor+r)*D,
@@ -4749,8 +4750,8 @@ static void pin_load(Model *m, const char *statspath, double gb){
     for(int i=0;i<=c->n_layers;i++) m->npin[i]=cnt_l[i];
     double t0=now_s();
 #ifdef COLI_CUDA
-    double remaining[COLI_CUDA_MAX_DEVICES]={0}, placed_b[COLI_CUDA_MAX_DEVICES]={0};
-    int placed_n[COLI_CUDA_MAX_DEVICES]={0}, gpu_prefix=0;
+    double remaining[COLI_CUDA_MAX_DEVICES]={0}, placed_b[COLI_CUDA_MAX_DEVICES]={0}; (void)remaining; (void)placed_b;
+    int placed_n[COLI_CUDA_MAX_DEVICES]={0}, gpu_prefix=0; (void)placed_n;
     double budget=g_cuda_expert_gb*1e9, safe_total=0;
     if(g_cuda_enabled&&(g_cuda_expert_gb>0||g_cuda_expert_auto)) for(int i=0;i<g_cuda_ndev;i++){
         size_t free_b=0,total_b=0;
@@ -4778,7 +4779,7 @@ static void pin_load(Model *m, const char *statspath, double gb){
             { ESlot *s=&m->pin[li][slot_of[a]];
                 int64_t need=qt_bytes(&s->g)+qt_bytes(&s->u)+qt_bytes(&s->d);
                 if(m->gpu_expert_bytes+need>budget) break;
-                int tried[COLI_CUDA_MAX_DEVICES]={0}, placed=0;
+                int tried[COLI_CUDA_MAX_DEVICES]={0}, placed=0; (void)tried;
                 for(int attempt=0;attempt<g_cuda_ndev && !placed;attempt++){
                     int best=-1;
                     for(int i=0;i<g_cuda_ndev;i++) if(!tried[i] && remaining[i]>=need &&
