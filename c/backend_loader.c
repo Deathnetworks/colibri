@@ -151,7 +151,11 @@ static int coli_cuda_load(void){
      * LOAD_WITH_ALTERED_SEARCH_PATH anchors both the DLL and its dependency
      * search to the trusted install directory instead of the CWD. */
     char dllpath[MAX_PATH];
-    DWORD mn = GetModuleFileNameA(NULL, dllpath, (DWORD)sizeof(dllpath));
+    HMODULE hm = NULL;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCSTR)&coli_cuda_load, &hm);
+    DWORD mn = GetModuleFileNameA(hm, dllpath, (DWORD)sizeof(dllpath));
     if(mn > 0 && mn < sizeof(dllpath)){
         char *slash = strrchr(dllpath, '\\');
         if(slash && (size_t)(slash + 1 - dllpath) + sizeof("coli_cuda.dll") <= sizeof(dllpath)){
@@ -160,8 +164,8 @@ static int coli_cuda_load(void){
         }
     }
     if(!g_cuda.dll){
-        /* fallback (GetModuleFileNameA praticamente non fallisce): cerca solo
-         * nella dir dell'applicazione e in System32, MAI la CWD. */
+        /* fallback (GetModuleFileNameA almost never fails): search only
+         * in the application directory and System32, NEVER the CWD. */
         g_cuda.dll = LoadLibraryExA("coli_cuda.dll", NULL,
             LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
     }
@@ -498,11 +502,31 @@ static int coli_sycl_load(void){
     if(g_sycl.loaded) return g_sycl.available;
     g_sycl.loaded = 1;
 
-    /* Search the model directory first (so a DLL shipped next to the model
-     * wins), then the engine directory, then the default DLL search path. */
-    g_sycl.dll = LoadLibraryA("coli_sycl.dll");
+    /* Load coli_sycl.dll from the engine's OWN directory, by absolute path —
+     * never a bare name. Resolving the path next to glm.exe and loading THAT
+     * specific file with LOAD_WITH_ALTERED_SEARCH_PATH anchors both the DLL
+     * and its dependency search to the trusted install directory instead of CWD. */
+    char dllpath[MAX_PATH];
+    HMODULE hm = NULL;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCSTR)&coli_sycl_load, &hm);
+    DWORD mn = GetModuleFileNameA(hm, dllpath, (DWORD)sizeof(dllpath));
+    if(mn > 0 && mn < sizeof(dllpath)){
+        char *slash = strrchr(dllpath, '\\');
+        if(slash && (size_t)(slash + 1 - dllpath) + sizeof("coli_sycl.dll") <= sizeof(dllpath)){
+            strcpy(slash + 1, "coli_sycl.dll");
+            g_sycl.dll = LoadLibraryExA(dllpath, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+        }
+    }
     if(!g_sycl.dll){
-        fprintf(stderr, "[SYCL] coli_sycl.dll not found; GPU tier disabled "
+        /* fallback (GetModuleFileNameA almost never fails): search only
+         * in the application directory and System32, NEVER the CWD. */
+        g_sycl.dll = LoadLibraryExA("coli_sycl.dll", NULL,
+            LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    }
+    if(!g_sycl.dll){
+        fprintf(stderr, "[SYCL] coli_sycl.dll not found (or dependencies like oneAPI/SYCL runtime are missing from PATH); GPU tier disabled "
                         "(CPU path remains active).\n");
         return 0;
     }
@@ -828,11 +852,31 @@ static int coli_vulkan_load(void){
     if(g_vulkan.loaded) return g_vulkan.available;
     g_vulkan.loaded = 1;
 
-    /* Search the model directory first (so a DLL shipped next to the model
-     * wins), then the engine directory, then the default DLL search path. */
-    g_vulkan.dll = LoadLibraryA("coli_vulkan.dll");
+    /* Load coli_vulkan.dll from the engine's OWN directory, by absolute path —
+     * never a bare name. Resolving the path next to glm.exe and loading THAT
+     * specific file with LOAD_WITH_ALTERED_SEARCH_PATH anchors both the DLL
+     * and its dependency search to the trusted install directory instead of CWD. */
+    char dllpath[MAX_PATH];
+    HMODULE hm = NULL;
+    GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS |
+                       GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                       (LPCSTR)&coli_vulkan_load, &hm);
+    DWORD mn = GetModuleFileNameA(hm, dllpath, (DWORD)sizeof(dllpath));
+    if(mn > 0 && mn < sizeof(dllpath)){
+        char *slash = strrchr(dllpath, '\\');
+        if(slash && (size_t)(slash + 1 - dllpath) + sizeof("coli_vulkan.dll") <= sizeof(dllpath)){
+            strcpy(slash + 1, "coli_vulkan.dll");
+            g_vulkan.dll = LoadLibraryExA(dllpath, NULL, LOAD_WITH_ALTERED_SEARCH_PATH);
+        }
+    }
     if(!g_vulkan.dll){
-        fprintf(stderr, "[VULKAN] coli_vulkan.dll not found; GPU tier disabled "
+        /* fallback (GetModuleFileNameA almost never fails): search only
+         * in the application directory and System32, NEVER the CWD. */
+        g_vulkan.dll = LoadLibraryExA("coli_vulkan.dll", NULL,
+            LOAD_LIBRARY_SEARCH_APPLICATION_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    }
+    if(!g_vulkan.dll){
+        fprintf(stderr, "[VULKAN] coli_vulkan.dll not found (or dependencies like Vulkan runtime are missing from PATH); GPU tier disabled "
                         "(CPU path remains active).\n");
         return 0;
     }
