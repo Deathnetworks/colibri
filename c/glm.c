@@ -1423,7 +1423,7 @@ static int expert_load(Model *m, int layer, int eid, ESlot *s, int fatal){
     Cfg *c=&m->c; int I=c->moe_inter, D=c->hidden, b=m->ebits;
     char nm[3][288]; const char *suf[3]={"gate_proj","up_proj","down_proj"};
     for(int k=0;k<3;k++) snprintf(nm[k],sizeof(nm[k]),"model.layers.%d.mlp.experts.%d.%s.weight",layer,eid,suf[k]);
-    char qn[300]; snprintf(qn,sizeof(qn),"%s.qs",nm[0]);
+    char qn[1024]; snprintf(qn,sizeof(qn),"%s.qs",nm[0]);
     if(!st_has(&m->S,qn)){                       /* fallback: tensori pieni, quantizza a runtime.
                                                   * Reachable ONLY for unquantized models (no .qs);
                                                   * GLM always has .qs, so the pilot never hits it. */
