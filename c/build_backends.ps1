@@ -7,8 +7,7 @@ param (
 if ($Sycl) {
     Write-Host "Building SYCL Backend (coli_sycl.dll)..."
     # Execute the build in a subshell where we call the oneAPI setup script first
-    $syclCommand = 'cmd.exe /c "call `"C:\Program Files (x86)\Intel\oneAPI\setvars.bat`" intel64 --force && icpx -fsycl -O3 -shared -DCOLI_SYCL_BUILDING_DLL backend_sycl.cpp -o coli_sycl.dll"'
-    Invoke-Expression $syclCommand
+    cmd.exe /c 'call "C:\Program Files (x86)\Intel\oneAPI\setvars.bat" intel64 --force && icpx -fsycl -O3 -shared -DCOLI_SYCL_BUILDING_DLL backend_sycl.cpp -o coli_sycl.dll'
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to build SYCL backend."
     } else {
@@ -20,8 +19,8 @@ if ($Sycl) {
 if ($Vulkan) {
     Write-Host "Building Vulkan Backend (coli_vulkan.dll)..."
     # Assuming VULKAN_SDK is installed and cl is available
-    $vulkanCommand = "cl.exe /O2 /LD /DCOLI_VULKAN_BUILDING_DLL backend_vulkan.cpp /link /OUT:coli_vulkan.dll /LIBPATH:`"`$env:VULKAN_SDK\lib`" vulkan-1.lib"
-    Invoke-Expression $vulkanCommand
+    $vulkanLib = "$env:VULKAN_SDK\lib"
+    cmd.exe /c "cl.exe /O2 /LD /DCOLI_VULKAN_BUILDING_DLL backend_vulkan.cpp /link /OUT:coli_vulkan.dll /LIBPATH:`"$vulkanLib`" vulkan-1.lib"
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Failed to build Vulkan backend."
     } else {
