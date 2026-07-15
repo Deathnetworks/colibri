@@ -140,8 +140,17 @@ def need_model(model):
     if not os.path.exists(GLM):
         sys.exit(f"{C.yel}engine is not built.{C.r} Run: coli build")
 
+
+def sycl_binary():
+    if not os.path.exists(GLM): return False
+    return os.path.exists(os.path.join(os.path.dirname(GLM), "coli_sycl.dll"))
+
+
 def cuda_binary():
-    if not os.path.exists(GLM) or sys.platform != "linux": return False
+    if not os.path.exists(GLM): return False
+    if sys.platform == "win32":
+        return os.path.exists(os.path.join(os.path.dirname(GLM), "coli_cuda.dll"))
+    if sys.platform != "linux": return False
     try:
         linked=subprocess.run(["ldd",GLM],capture_output=True,text=True,timeout=3)
         return any("libcudart" in line and "not found" not in line
@@ -185,10 +194,11 @@ def env_for(a):
             plan=build_plan(a.model,ram,ctx,devices,vram,policy=a.policy)
         except (OSError,ValueError,json.JSONDecodeError) as error:
             sys.exit(f"{C.yel}invalid resource plan:{C.r} {error}")
-        has_cuda=cuda_binary()
-        e=environment_for_plan(plan,e,has_cuda)
+        has_cuda = cuda_binary()
+        has_sycl = sycl_binary()
+        e=environment_for_plan(plan,e,has_cuda or has_sycl)
         rt=plan["tiers"]["ram"]; vt=plan["tiers"]["vram"]
-        gpu=f" · VRAM {format_bytes(vt['budget_bytes'])}" if has_cuda and vt["devices"] else " · CPU"
+        gpu=f" · VRAM {format_bytes(vt['budget_bytes'])}" if (has_cuda or has_sycl) and vt["devices"] else " · CPU"
         print(f"  {C.dim}[PLAN] RAM {format_bytes(rt['budget_bytes'])} · cap {rt['cache_slots_per_layer']}/layer{gpu}{C.r}",file=sys.stderr)
     else:
         # --gpu/--vram SENZA --auto-tier: prima venivano ignorati in silenzio e il run
@@ -198,15 +208,21 @@ def env_for(a):
             if a.gpu=="none":
                 e["COLI_CUDA"]="0"; e.pop("CUDA_EXPERT_GB",None); e.pop("CUDA_DENSE",None)
             else:
-                if not cuda_binary():
-                    sys.exit(f"{C.yel}--gpu needs the CUDA build:{C.r} make glm CUDA=1 (this binary is CPU-only)")
-                e["COLI_CUDA"]="1"
+                if sycl_binary():
+                    e["COLI_SYCL"]="1"
+                elif cuda_binary():
+                    e["COLI_CUDA"]="1"
+                else:
+                    sys.exit(f"{C.yel}--gpu needs the CUDA or SYCL build:{C.r} make glm CUDA=1 or SYCL_DLL=1 (this binary is CPU-only)")
                 if a.gpu!="auto": e["COLI_GPUS"]=a.gpu
                 e.setdefault("CUDA_DENSE","1")
         if a.vram and a.gpu!="none":
-            if not cuda_binary():
-                sys.exit(f"{C.yel}--vram needs the CUDA build:{C.r} make glm CUDA=1 (this binary is CPU-only)")
-            e["COLI_CUDA"]="1"; e["CUDA_EXPERT_GB"]=str(a.vram)
+            if sycl_binary():
+                e["COLI_SYCL"]="1"; e["CUDA_EXPERT_GB"]=str(a.vram)
+            elif cuda_binary():
+                e["COLI_CUDA"]="1"; e["CUDA_EXPERT_GB"]=str(a.vram)
+            else:
+                sys.exit(f"{C.yel}--vram needs the CUDA or SYCL build:{C.r} make glm CUDA=1 or SYCL_DLL=1 (this binary is CPU-only)")
     return e
 
 # ---------- rendering markdown in STREAMING per il terminale ----------
