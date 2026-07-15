@@ -25,6 +25,8 @@
 #include <windows.h>
 
 #include "backend_cuda.h"
+#include "backend_sycl.h"
+#include "backend_vulkan.h"
 
 /* Function-pointer typedefs matching each exported symbol. */
 typedef int            (*fn_init)(const int *devices, int count);
@@ -132,6 +134,119 @@ static struct {
  * Idempotent: the first call (success or fail) sticks; later calls are no-ops
  * that return the cached result. The engine treats a 0 return as "CUDA
  * unavailable" and falls back to the CPU path without aborting. */
+
+static int coli_sycl_load(void){
+    if(g_sycl.loaded) return g_sycl.available;
+    g_sycl.loaded = 1;
+
+    g_sycl.dll = LoadLibraryA("coli_sycl.dll");
+    if(!g_sycl.dll){
+        return 0;
+    }
+
+    #define RESOLVE_SYCL(name, type)         _Pragma("GCC diagnostic push")         _Pragma("GCC diagnostic ignored \"-Wcast-function-type\"")         g_sycl.name = (type)GetProcAddress(g_sycl.dll, "coli_sycl_" #name);         _Pragma("GCC diagnostic pop")         if(!g_sycl.name){             fprintf(stderr, "[SYCL] coli_sycl.dll missing symbol coli_sycl_" #name "\n");             FreeLibrary(g_sycl.dll); g_sycl.dll=NULL; return 0; }
+
+    RESOLVE_SYCL(init,           fn_init)
+    RESOLVE_SYCL(shutdown,       fn_shutdown)
+    RESOLVE_SYCL(device_count,   fn_device_count)
+    RESOLVE_SYCL(device_at,      fn_device_at)
+    RESOLVE_SYCL(mem_info,       fn_mem_info)
+    RESOLVE_SYCL(stats,          fn_stats)
+    RESOLVE_SYCL(group_stats,    fn_group_stats)
+    RESOLVE_SYCL(expert_mlp,     fn_expert_mlp)
+    RESOLVE_SYCL(expert_group,   fn_expert_group)
+    RESOLVE_SYCL(attention_absorb, fn_attention_absorb)
+    RESOLVE_SYCL(tensor_upload,  fn_tensor_upload)
+    RESOLVE_SYCL(matmul,         fn_matmul)
+    RESOLVE_SYCL(tensor_free,    fn_tensor_free)
+    RESOLVE_SYCL(tensor_bytes,   fn_tensor_bytes)
+    RESOLVE_SYCL(tensor_device,  fn_tensor_device)
+    RESOLVE_SYCL(attention_absorb_batch, fn_attention_absorb_batch)
+    RESOLVE_SYCL(attention_absorb_batch_dev, fn_attention_absorb_batch_dev)
+    RESOLVE_SYCL(attention_absorb_kvdev, fn_attention_absorb_kvdev)
+    RESOLVE_SYCL(attention_project_batch, fn_attention_project_batch)
+    RESOLVE_SYCL(attention_project_batch_dev, fn_attention_project_batch_dev)
+    RESOLVE_SYCL(attention_project_batch_dev_out, fn_attention_project_batch_dev_out)
+    RESOLVE_SYCL(pipe_add, fn_pipe_add)
+    RESOLVE_SYCL(pipe_alloc, fn_pipe_alloc)
+    RESOLVE_SYCL(pipe_copy2d, fn_pipe_copy2d)
+    RESOLVE_SYCL(pipe_download, fn_pipe_download)
+    RESOLVE_SYCL(pipe_free, fn_pipe_free)
+    RESOLVE_SYCL(pipe_gemm, fn_pipe_gemm)
+    RESOLVE_SYCL(pipe_peer_copy, fn_pipe_peer_copy)
+    RESOLVE_SYCL(pipe_rmsnorm, fn_pipe_rmsnorm)
+    RESOLVE_SYCL(pipe_rmsnorm_s, fn_pipe_rmsnorm_s)
+    RESOLVE_SYCL(pipe_rope, fn_pipe_rope)
+    RESOLVE_SYCL(pipe_rope_base, fn_pipe_rope_base)
+    RESOLVE_SYCL(pipe_rows_add, fn_pipe_rows_add)
+    RESOLVE_SYCL(pipe_scratch, fn_pipe_scratch)
+    RESOLVE_SYCL(pipe_silu_mul, fn_pipe_silu_mul)
+    RESOLVE_SYCL(pipe_sync, fn_pipe_sync)
+    RESOLVE_SYCL(pipe_upload, fn_pipe_upload)
+    RESOLVE_SYCL(shared_mlp_w4a16, fn_shared_mlp_w4a16)
+    RESOLVE_SYCL(tensor_update, fn_tensor_update)
+    #undef RESOLVE_SYCL
+
+    g_sycl.available = 1;
+    return 1;
+}
+
+static int coli_vulkan_load(void){
+    if(g_vulkan.loaded) return g_vulkan.available;
+    g_vulkan.loaded = 1;
+
+    g_vulkan.dll = LoadLibraryA("coli_vulkan.dll");
+    if(!g_vulkan.dll){
+        return 0;
+    }
+
+    #define RESOLVE_VULKAN(name, type)         _Pragma("GCC diagnostic push")         _Pragma("GCC diagnostic ignored \"-Wcast-function-type\"")         g_vulkan.name = (type)GetProcAddress(g_vulkan.dll, "coli_vulkan_" #name);         _Pragma("GCC diagnostic pop")         if(!g_vulkan.name){             fprintf(stderr, "[Vulkan] coli_vulkan.dll missing symbol coli_vulkan_" #name "\n");             FreeLibrary(g_vulkan.dll); g_vulkan.dll=NULL; return 0; }
+
+    RESOLVE_VULKAN(init,           fn_init)
+    RESOLVE_VULKAN(shutdown,       fn_shutdown)
+    RESOLVE_VULKAN(device_count,   fn_device_count)
+    RESOLVE_VULKAN(device_at,      fn_device_at)
+    RESOLVE_VULKAN(mem_info,       fn_mem_info)
+    RESOLVE_VULKAN(stats,          fn_stats)
+    RESOLVE_VULKAN(group_stats,    fn_group_stats)
+    RESOLVE_VULKAN(expert_mlp,     fn_expert_mlp)
+    RESOLVE_VULKAN(expert_group,   fn_expert_group)
+    RESOLVE_VULKAN(attention_absorb, fn_attention_absorb)
+    RESOLVE_VULKAN(tensor_upload,  fn_tensor_upload)
+    RESOLVE_VULKAN(matmul,         fn_matmul)
+    RESOLVE_VULKAN(tensor_free,    fn_tensor_free)
+    RESOLVE_VULKAN(tensor_bytes,   fn_tensor_bytes)
+    RESOLVE_VULKAN(tensor_device,  fn_tensor_device)
+    RESOLVE_VULKAN(attention_absorb_batch, fn_attention_absorb_batch)
+    RESOLVE_VULKAN(attention_absorb_batch_dev, fn_attention_absorb_batch_dev)
+    RESOLVE_VULKAN(attention_absorb_kvdev, fn_attention_absorb_kvdev)
+    RESOLVE_VULKAN(attention_project_batch, fn_attention_project_batch)
+    RESOLVE_VULKAN(attention_project_batch_dev, fn_attention_project_batch_dev)
+    RESOLVE_VULKAN(attention_project_batch_dev_out, fn_attention_project_batch_dev_out)
+    RESOLVE_VULKAN(pipe_add, fn_pipe_add)
+    RESOLVE_VULKAN(pipe_alloc, fn_pipe_alloc)
+    RESOLVE_VULKAN(pipe_copy2d, fn_pipe_copy2d)
+    RESOLVE_VULKAN(pipe_download, fn_pipe_download)
+    RESOLVE_VULKAN(pipe_free, fn_pipe_free)
+    RESOLVE_VULKAN(pipe_gemm, fn_pipe_gemm)
+    RESOLVE_VULKAN(pipe_peer_copy, fn_pipe_peer_copy)
+    RESOLVE_VULKAN(pipe_rmsnorm, fn_pipe_rmsnorm)
+    RESOLVE_VULKAN(pipe_rmsnorm_s, fn_pipe_rmsnorm_s)
+    RESOLVE_VULKAN(pipe_rope, fn_pipe_rope)
+    RESOLVE_VULKAN(pipe_rope_base, fn_pipe_rope_base)
+    RESOLVE_VULKAN(pipe_rows_add, fn_pipe_rows_add)
+    RESOLVE_VULKAN(pipe_scratch, fn_pipe_scratch)
+    RESOLVE_VULKAN(pipe_silu_mul, fn_pipe_silu_mul)
+    RESOLVE_VULKAN(pipe_sync, fn_pipe_sync)
+    RESOLVE_VULKAN(pipe_upload, fn_pipe_upload)
+    RESOLVE_VULKAN(shared_mlp_w4a16, fn_shared_mlp_w4a16)
+    RESOLVE_VULKAN(tensor_update, fn_tensor_update)
+    #undef RESOLVE_VULKAN
+
+    g_vulkan.available = 1;
+    return 1;
+}
+
 static int coli_cuda_load(void){
     if(g_cuda.loaded) return g_cuda.available;
     g_cuda.loaded = 1;
@@ -419,5 +534,666 @@ int coli_cuda_tensor_update(ColiCudaTensor *tensor, const void *weights, const f
     if(!g_cuda.available){ return 0; }
     return g_cuda.tensor_update(tensor, weights, scales);
 }
+
+
+
+/* SYCL BACKEND */
+static struct {
+    int loaded;        /* 1 = load attempted (success or fail), 0 = not yet */
+    int available;     /* 1 = DLL loaded and all symbols resolved */
+    HMODULE dll;
+    fn_init            init;
+    fn_shutdown        shutdown;
+    fn_device_count    device_count;
+    fn_device_at       device_at;
+    fn_mem_info        mem_info;
+    fn_stats           stats;
+    fn_group_stats     group_stats;
+    fn_expert_mlp      expert_mlp;
+    fn_expert_group    expert_group;
+    fn_attention_absorb attention_absorb;
+    fn_tensor_upload   tensor_upload;
+    fn_matmul          matmul;
+    fn_tensor_free     tensor_free;
+    fn_tensor_bytes    tensor_bytes;
+    fn_tensor_device   tensor_device;
+
+    fn_attention_absorb_batch attention_absorb_batch;
+    fn_attention_absorb_batch_dev attention_absorb_batch_dev;
+    fn_attention_absorb_kvdev attention_absorb_kvdev;
+    fn_attention_project_batch attention_project_batch;
+    fn_attention_project_batch_dev attention_project_batch_dev;
+    fn_attention_project_batch_dev_out attention_project_batch_dev_out;
+    fn_pipe_add pipe_add;
+    fn_pipe_alloc pipe_alloc;
+    fn_pipe_copy2d pipe_copy2d;
+    fn_pipe_download pipe_download;
+    fn_pipe_free pipe_free;
+    fn_pipe_gemm pipe_gemm;
+    fn_pipe_peer_copy pipe_peer_copy;
+    fn_pipe_rmsnorm pipe_rmsnorm;
+    fn_pipe_rmsnorm_s pipe_rmsnorm_s;
+    fn_pipe_rope pipe_rope;
+    fn_pipe_rope_base pipe_rope_base;
+    fn_pipe_rows_add pipe_rows_add;
+    fn_pipe_scratch pipe_scratch;
+    fn_pipe_silu_mul pipe_silu_mul;
+    fn_pipe_sync pipe_sync;
+    fn_pipe_upload pipe_upload;
+    fn_shared_mlp_w4a16 shared_mlp_w4a16;
+    fn_tensor_update tensor_update;
+} g_sycl;
+static int coli_sycl_load(void){
+    if(g_sycl.loaded) return g_sycl.available;
+    g_sycl.loaded = 1;
+
+    /* Search the model directory first (so a DLL shipped next to the model
+     * wins), then the engine directory, then the default DLL search path. */
+    g_sycl.dll = LoadLibraryA("coli_sycl.dll");
+    if(!g_sycl.dll){
+        fprintf(stderr, "[SYCL] coli_sycl.dll not found; GPU tier disabled "
+                        "(CPU path remains active).\n");
+        return 0;
+    }
+
+    #define RESOLVE_SYCL(name, type) \
+        /* GetProcAddress returns FARPROC (void(*)(void)); casting it to a   \
+         * specific function-pointer type is the standard LoadLibrary idiom. \
+         * -Wcast-function-type flags it but it is safe: the DLL exported     \
+         * the symbol with extern "C" and the exact signature we expect. */   \
+        _Pragma("GCC diagnostic push") \
+        _Pragma("GCC diagnostic ignored \"-Wcast-function-type\"") \
+        g_sycl.name = (type)GetProcAddress(g_sycl.dll, "coli_sycl_" #name); \
+        _Pragma("GCC diagnostic pop") \
+        if(!g_sycl.name){ \
+            fprintf(stderr, "[SYCL] coli_sycl.dll missing symbol coli_sycl_" #name "\n"); \
+            FreeLibrary(g_sycl.dll); g_sycl.dll=NULL; return 0; }
+
+    RESOLVE_SYCL(init,           fn_init)
+    RESOLVE_SYCL(shutdown,       fn_shutdown)
+    RESOLVE_SYCL(device_count,   fn_device_count)
+    RESOLVE_SYCL(device_at,      fn_device_at)
+    RESOLVE_SYCL(mem_info,       fn_mem_info)
+    RESOLVE_SYCL(stats,          fn_stats)
+    RESOLVE_SYCL(group_stats,    fn_group_stats)
+    RESOLVE_SYCL(expert_mlp,     fn_expert_mlp)
+    RESOLVE_SYCL(expert_group,   fn_expert_group)
+    RESOLVE_SYCL(attention_absorb, fn_attention_absorb)
+    RESOLVE_SYCL(tensor_upload,  fn_tensor_upload)
+    RESOLVE_SYCL(matmul,         fn_matmul)
+    RESOLVE_SYCL(tensor_free,    fn_tensor_free)
+    RESOLVE_SYCL(tensor_bytes,   fn_tensor_bytes)
+    RESOLVE_SYCL(tensor_device,  fn_tensor_device)
+
+    RESOLVE_SYCL(attention_absorb_batch, fn_attention_absorb_batch)
+    RESOLVE_SYCL(attention_absorb_batch_dev, fn_attention_absorb_batch_dev)
+    RESOLVE_SYCL(attention_absorb_kvdev, fn_attention_absorb_kvdev)
+    RESOLVE_SYCL(attention_project_batch, fn_attention_project_batch)
+    RESOLVE_SYCL(attention_project_batch_dev, fn_attention_project_batch_dev)
+    RESOLVE_SYCL(attention_project_batch_dev_out, fn_attention_project_batch_dev_out)
+    RESOLVE_SYCL(pipe_add, fn_pipe_add)
+    RESOLVE_SYCL(pipe_alloc, fn_pipe_alloc)
+    RESOLVE_SYCL(pipe_copy2d, fn_pipe_copy2d)
+    RESOLVE_SYCL(pipe_download, fn_pipe_download)
+    RESOLVE_SYCL(pipe_free, fn_pipe_free)
+    RESOLVE_SYCL(pipe_gemm, fn_pipe_gemm)
+    RESOLVE_SYCL(pipe_peer_copy, fn_pipe_peer_copy)
+    RESOLVE_SYCL(pipe_rmsnorm, fn_pipe_rmsnorm)
+    RESOLVE_SYCL(pipe_rmsnorm_s, fn_pipe_rmsnorm_s)
+    RESOLVE_SYCL(pipe_rope, fn_pipe_rope)
+    RESOLVE_SYCL(pipe_rope_base, fn_pipe_rope_base)
+    RESOLVE_SYCL(pipe_rows_add, fn_pipe_rows_add)
+    RESOLVE_SYCL(pipe_scratch, fn_pipe_scratch)
+    RESOLVE_SYCL(pipe_silu_mul, fn_pipe_silu_mul)
+    RESOLVE_SYCL(pipe_sync, fn_pipe_sync)
+    RESOLVE_SYCL(pipe_upload, fn_pipe_upload)
+    RESOLVE_SYCL(shared_mlp_w4a16, fn_shared_mlp_w4a16)
+    RESOLVE_SYCL(tensor_update, fn_tensor_update)
+    #undef RESOLVE_SYCL
+
+    g_sycl.available = 1;
+    return 1;
+}
+int coli_sycl_init(const int *devices, int count){
+    if(!coli_sycl_load()) return 0;
+    return g_sycl.init(devices, count);
+}
+
+void coli_sycl_shutdown(void){
+    if(g_sycl.available && g_sycl.shutdown) g_sycl.shutdown();
+}
+
+int coli_sycl_device_count(void){
+    if(!g_sycl.available) return 0;
+    return g_sycl.device_count();
+}
+
+int coli_sycl_device_at(int index){
+    if(!g_sycl.available) return -1;
+    return g_sycl.device_at(index);
+}
+
+int coli_sycl_mem_info(int device, size_t *free_bytes, size_t *total_bytes){
+    if(!g_sycl.available){ if(free_bytes)*free_bytes=0; if(total_bytes)*total_bytes=0; return 0; }
+    return g_sycl.mem_info(device, free_bytes, total_bytes);
+}
+
+void coli_sycl_stats(int device, size_t *tensor_count, size_t *tensor_bytes){
+    if(!g_sycl.available){ if(tensor_count)*tensor_count=0; if(tensor_bytes)*tensor_bytes=0; return; }
+    g_sycl.stats(device, tensor_count, tensor_bytes);
+}
+
+void coli_sycl_group_stats(uint64_t *calls, uint64_t *experts, uint64_t *rows,
+                           double *h2d_ms, double *kernel_ms, double *d2h_ms){
+    if(!g_sycl.available){
+        if(calls)*calls=0; if(experts)*experts=0; if(rows)*rows=0;
+        if(h2d_ms)*h2d_ms=0; if(kernel_ms)*kernel_ms=0; if(d2h_ms)*d2h_ms=0;
+        return;
+    }
+    g_sycl.group_stats(calls, experts, rows, h2d_ms, kernel_ms, d2h_ms);
+}
+
+int coli_sycl_expert_mlp(ColiSyclTensor *gate, ColiSyclTensor *up,
+                         ColiSyclTensor *down, float *y, const float *x, int S){
+    if(!g_sycl.available) return 0;
+    return g_sycl.expert_mlp(gate, up, down, y, x, S);
+}
+
+int coli_sycl_expert_group(ColiSyclTensor *const *gates, ColiSyclTensor *const *ups,
+                           ColiSyclTensor *const *downs, const int *rows, int count,
+                           float *y, const float *x){
+    if(!g_sycl.available) return 0;
+    return g_sycl.expert_group(gates, ups, downs, rows, count, y, x);
+}
+
+int coli_sycl_attention_absorb(ColiSyclTensor *kv_b, float *ctx, const float *q,
+                               const float *latent, const float *rope, int H, int Q,
+                               int R, int V, int K, int T, float attention_scale){
+    if(!g_sycl.available) return 0;
+    return g_sycl.attention_absorb(kv_b, ctx, q, latent, rope, H, Q, R, V, K, T, attention_scale);
+}
+
+int coli_sycl_tensor_upload(ColiSyclTensor **tensor, const void *weights,
+                            const float *scales, int fmt, int I, int O, int device){
+    if(!g_sycl.available) return 0;
+    return g_sycl.tensor_upload(tensor, weights, scales, fmt, I, O, device);
+}
+
+int coli_sycl_matmul(ColiSyclTensor **tensor, float *y, const float *x,
+                     const void *weights, const float *scales,
+                     int fmt, int S, int I, int O, int device){
+    if(!g_sycl.available) return 0;
+    return g_sycl.matmul(tensor, y, x, weights, scales, fmt, S, I, O, device);
+}
+
+void coli_sycl_tensor_free(ColiSyclTensor *tensor){
+    if(g_sycl.available && g_sycl.tensor_free) g_sycl.tensor_free(tensor);
+}
+
+size_t coli_sycl_tensor_bytes(const ColiSyclTensor *tensor){
+    if(!g_sycl.available) return 0;
+    return g_sycl.tensor_bytes(tensor);
+}
+
+int coli_sycl_tensor_device(const ColiSyclTensor *tensor){
+    if(!g_sycl.available) return -1;
+    return g_sycl.tensor_device(tensor);
+}
+
+/* ---- #111 pipeline wrappers ---- */
+
+
+/* ---- #111 pipeline wrappers (see header for semantics) ---- */
+
+int coli_sycl_attention_absorb_batch(ColiSyclTensor *kv_b,float *ctx,const float *q, const float *latent,const float *rope,int S, int H,int Q,int R,int V,int K,int T, float attention_scale){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.attention_absorb_batch(kv_b, ctx, q, latent, rope, S, H, Q, R, V, K, T, attention_scale);
+}
+
+int coli_sycl_attention_absorb_batch_dev(ColiSyclTensor *kv_b_shard,float *ctx_dev, const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.attention_absorb_batch_dev(kv_b_shard, ctx_dev, q_dev, latent_dev, rope_dev, S, H, Q, R, V, K, T, scale);
+}
+
+int coli_sycl_attention_absorb_kvdev(ColiSyclTensor *kv_b,float *ctx,const float *q, const float *latent_dev,const float *rope_dev,int H,int Q,int R,int V,int K,int T, float scale){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.attention_absorb_kvdev(kv_b, ctx, q, latent_dev, rope_dev, H, Q, R, V, K, T, scale);
+}
+
+int coli_sycl_attention_project_batch(ColiSyclTensor *kv_b,ColiSyclTensor *o_proj, float *out,const float *q,const float *latent, const float *rope,int S,int H,int Q,int R, int V,int K,int T,float attention_scale){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.attention_project_batch(kv_b, o_proj, out, q, latent, rope, S, H, Q, R, V, K, T, attention_scale);
+}
+
+int coli_sycl_attention_project_batch_dev(ColiSyclTensor *kv_b,ColiSyclTensor *o_proj, float *out,const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.attention_project_batch_dev(kv_b, o_proj, out, q_dev, latent_dev, rope_dev, S, H, Q, R, V, K, T, scale);
+}
+
+int coli_sycl_attention_project_batch_dev_out(ColiSyclTensor *kv_b,ColiSyclTensor *o_proj, float *out_dev,const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.attention_project_batch_dev_out(kv_b, o_proj, out_dev, q_dev, latent_dev, rope_dev, S, H, Q, R, V, K, T, scale);
+}
+
+int coli_sycl_pipe_add(int device,float *x_dev,const float *t_dev,size_t n){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_add(device, x_dev, t_dev, n);
+}
+
+void * coli_sycl_pipe_alloc(int device,size_t bytes){
+    if(!g_sycl.available){ return NULL; }
+    return g_sycl.pipe_alloc(device, bytes);
+}
+
+int coli_sycl_pipe_copy2d(int device,float *dst,int dpitch,const float *src, int spitch,int width,int height){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_copy2d(device, dst, dpitch, src, spitch, width, height);
+}
+
+int coli_sycl_pipe_download(int device,const void *src,void *dst,size_t bytes){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_download(device, src, dst, bytes);
+}
+
+void coli_sycl_pipe_free(int device,void *p){
+    if(!g_sycl.available){ return; }
+    g_sycl.pipe_free(device, p);
+}
+
+int coli_sycl_pipe_gemm(ColiSyclTensor *t,float *y_dev,const float *x_dev,int S){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_gemm(t, y_dev, x_dev, S);
+}
+
+int coli_sycl_pipe_peer_copy(int dst_dev,float *dst,int src_dev, const float *src,size_t bytes){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_peer_copy(dst_dev, dst, src_dev, src, bytes);
+}
+
+int coli_sycl_pipe_rmsnorm(int device,float *y_dev,const float *x_dev, const float *w_dev,int S,int D,float eps){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_rmsnorm(device, y_dev, x_dev, w_dev, S, D, eps);
+}
+
+int coli_sycl_pipe_rmsnorm_s(int device,float *y_dev,const float *x_dev, const float *w_dev,int S,int D,float eps, int xstride,int ystride){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_rmsnorm_s(device, y_dev, x_dev, w_dev, S, D, eps, xstride, ystride);
+}
+
+int coli_sycl_pipe_rope(int device,float *v_dev,const int *pos_dev,int rows, int stride,int offset,int R,int heads,float theta){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_rope(device, v_dev, pos_dev, rows, stride, offset, R, heads, theta);
+}
+
+int coli_sycl_pipe_rope_base(int device,float *v_dev,int pos_base,int rows, int stride,int offset,int R,int heads,float theta){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_rope_base(device, v_dev, pos_base, rows, stride, offset, R, heads, theta);
+}
+
+int coli_sycl_pipe_rows_add(int device,float *x_dev,const float *partial_dev, const int *rows_dev,int nrows,int D){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_rows_add(device, x_dev, partial_dev, rows_dev, nrows, D);
+}
+
+float * coli_sycl_pipe_scratch(int device,int slot,size_t bytes){
+    if(!g_sycl.available){ return NULL; }
+    return g_sycl.pipe_scratch(device, slot, bytes);
+}
+
+int coli_sycl_pipe_silu_mul(int device,float *gate_dev,const float *up_dev,size_t n){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_silu_mul(device, gate_dev, up_dev, n);
+}
+
+int coli_sycl_pipe_sync(int device){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_sync(device);
+}
+
+int coli_sycl_pipe_upload(int device,void *dst,const void *src,size_t bytes){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.pipe_upload(device, dst, src, bytes);
+}
+
+int coli_sycl_shared_mlp_w4a16(ColiSyclTensor *gate, ColiSyclTensor *up, ColiSyclTensor *down, float *y, const float *x, int S){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.shared_mlp_w4a16(gate, up, down, y, x, S);
+}
+
+int coli_sycl_tensor_update(ColiSyclTensor *tensor, const void *weights, const float *scales){
+    if(!g_sycl.available){ return 0; }
+    return g_sycl.tensor_update(tensor, weights, scales);
+}
+
+
+
+/* VULKAN BACKEND */
+static struct {
+    int loaded;        /* 1 = load attempted (success or fail), 0 = not yet */
+    int available;     /* 1 = DLL loaded and all symbols resolved */
+    HMODULE dll;
+    fn_init            init;
+    fn_shutdown        shutdown;
+    fn_device_count    device_count;
+    fn_device_at       device_at;
+    fn_mem_info        mem_info;
+    fn_stats           stats;
+    fn_group_stats     group_stats;
+    fn_expert_mlp      expert_mlp;
+    fn_expert_group    expert_group;
+    fn_attention_absorb attention_absorb;
+    fn_tensor_upload   tensor_upload;
+    fn_matmul          matmul;
+    fn_tensor_free     tensor_free;
+    fn_tensor_bytes    tensor_bytes;
+    fn_tensor_device   tensor_device;
+
+    fn_attention_absorb_batch attention_absorb_batch;
+    fn_attention_absorb_batch_dev attention_absorb_batch_dev;
+    fn_attention_absorb_kvdev attention_absorb_kvdev;
+    fn_attention_project_batch attention_project_batch;
+    fn_attention_project_batch_dev attention_project_batch_dev;
+    fn_attention_project_batch_dev_out attention_project_batch_dev_out;
+    fn_pipe_add pipe_add;
+    fn_pipe_alloc pipe_alloc;
+    fn_pipe_copy2d pipe_copy2d;
+    fn_pipe_download pipe_download;
+    fn_pipe_free pipe_free;
+    fn_pipe_gemm pipe_gemm;
+    fn_pipe_peer_copy pipe_peer_copy;
+    fn_pipe_rmsnorm pipe_rmsnorm;
+    fn_pipe_rmsnorm_s pipe_rmsnorm_s;
+    fn_pipe_rope pipe_rope;
+    fn_pipe_rope_base pipe_rope_base;
+    fn_pipe_rows_add pipe_rows_add;
+    fn_pipe_scratch pipe_scratch;
+    fn_pipe_silu_mul pipe_silu_mul;
+    fn_pipe_sync pipe_sync;
+    fn_pipe_upload pipe_upload;
+    fn_shared_mlp_w4a16 shared_mlp_w4a16;
+    fn_tensor_update tensor_update;
+} g_vulkan;
+static int coli_vulkan_load(void){
+    if(g_vulkan.loaded) return g_vulkan.available;
+    g_vulkan.loaded = 1;
+
+    /* Search the model directory first (so a DLL shipped next to the model
+     * wins), then the engine directory, then the default DLL search path. */
+    g_vulkan.dll = LoadLibraryA("coli_vulkan.dll");
+    if(!g_vulkan.dll){
+        fprintf(stderr, "[VULKAN] coli_vulkan.dll not found; GPU tier disabled "
+                        "(CPU path remains active).\n");
+        return 0;
+    }
+
+    #define RESOLVE_VULKAN(name, type) \
+        /* GetProcAddress returns FARPROC (void(*)(void)); casting it to a   \
+         * specific function-pointer type is the standard LoadLibrary idiom. \
+         * -Wcast-function-type flags it but it is safe: the DLL exported     \
+         * the symbol with extern "C" and the exact signature we expect. */   \
+        _Pragma("GCC diagnostic push") \
+        _Pragma("GCC diagnostic ignored \"-Wcast-function-type\"") \
+        g_vulkan.name = (type)GetProcAddress(g_vulkan.dll, "coli_vulkan_" #name); \
+        _Pragma("GCC diagnostic pop") \
+        if(!g_vulkan.name){ \
+            fprintf(stderr, "[VULKAN] coli_vulkan.dll missing symbol coli_vulkan_" #name "\n"); \
+            FreeLibrary(g_vulkan.dll); g_vulkan.dll=NULL; return 0; }
+
+    RESOLVE_VULKAN(init,           fn_init)
+    RESOLVE_VULKAN(shutdown,       fn_shutdown)
+    RESOLVE_VULKAN(device_count,   fn_device_count)
+    RESOLVE_VULKAN(device_at,      fn_device_at)
+    RESOLVE_VULKAN(mem_info,       fn_mem_info)
+    RESOLVE_VULKAN(stats,          fn_stats)
+    RESOLVE_VULKAN(group_stats,    fn_group_stats)
+    RESOLVE_VULKAN(expert_mlp,     fn_expert_mlp)
+    RESOLVE_VULKAN(expert_group,   fn_expert_group)
+    RESOLVE_VULKAN(attention_absorb, fn_attention_absorb)
+    RESOLVE_VULKAN(tensor_upload,  fn_tensor_upload)
+    RESOLVE_VULKAN(matmul,         fn_matmul)
+    RESOLVE_VULKAN(tensor_free,    fn_tensor_free)
+    RESOLVE_VULKAN(tensor_bytes,   fn_tensor_bytes)
+    RESOLVE_VULKAN(tensor_device,  fn_tensor_device)
+
+    RESOLVE_VULKAN(attention_absorb_batch, fn_attention_absorb_batch)
+    RESOLVE_VULKAN(attention_absorb_batch_dev, fn_attention_absorb_batch_dev)
+    RESOLVE_VULKAN(attention_absorb_kvdev, fn_attention_absorb_kvdev)
+    RESOLVE_VULKAN(attention_project_batch, fn_attention_project_batch)
+    RESOLVE_VULKAN(attention_project_batch_dev, fn_attention_project_batch_dev)
+    RESOLVE_VULKAN(attention_project_batch_dev_out, fn_attention_project_batch_dev_out)
+    RESOLVE_VULKAN(pipe_add, fn_pipe_add)
+    RESOLVE_VULKAN(pipe_alloc, fn_pipe_alloc)
+    RESOLVE_VULKAN(pipe_copy2d, fn_pipe_copy2d)
+    RESOLVE_VULKAN(pipe_download, fn_pipe_download)
+    RESOLVE_VULKAN(pipe_free, fn_pipe_free)
+    RESOLVE_VULKAN(pipe_gemm, fn_pipe_gemm)
+    RESOLVE_VULKAN(pipe_peer_copy, fn_pipe_peer_copy)
+    RESOLVE_VULKAN(pipe_rmsnorm, fn_pipe_rmsnorm)
+    RESOLVE_VULKAN(pipe_rmsnorm_s, fn_pipe_rmsnorm_s)
+    RESOLVE_VULKAN(pipe_rope, fn_pipe_rope)
+    RESOLVE_VULKAN(pipe_rope_base, fn_pipe_rope_base)
+    RESOLVE_VULKAN(pipe_rows_add, fn_pipe_rows_add)
+    RESOLVE_VULKAN(pipe_scratch, fn_pipe_scratch)
+    RESOLVE_VULKAN(pipe_silu_mul, fn_pipe_silu_mul)
+    RESOLVE_VULKAN(pipe_sync, fn_pipe_sync)
+    RESOLVE_VULKAN(pipe_upload, fn_pipe_upload)
+    RESOLVE_VULKAN(shared_mlp_w4a16, fn_shared_mlp_w4a16)
+    RESOLVE_VULKAN(tensor_update, fn_tensor_update)
+    #undef RESOLVE_VULKAN
+
+    g_vulkan.available = 1;
+    return 1;
+}
+int coli_vulkan_init(const int *devices, int count){
+    if(!coli_vulkan_load()) return 0;
+    return g_vulkan.init(devices, count);
+}
+
+void coli_vulkan_shutdown(void){
+    if(g_vulkan.available && g_vulkan.shutdown) g_vulkan.shutdown();
+}
+
+int coli_vulkan_device_count(void){
+    if(!g_vulkan.available) return 0;
+    return g_vulkan.device_count();
+}
+
+int coli_vulkan_device_at(int index){
+    if(!g_vulkan.available) return -1;
+    return g_vulkan.device_at(index);
+}
+
+int coli_vulkan_mem_info(int device, size_t *free_bytes, size_t *total_bytes){
+    if(!g_vulkan.available){ if(free_bytes)*free_bytes=0; if(total_bytes)*total_bytes=0; return 0; }
+    return g_vulkan.mem_info(device, free_bytes, total_bytes);
+}
+
+void coli_vulkan_stats(int device, size_t *tensor_count, size_t *tensor_bytes){
+    if(!g_vulkan.available){ if(tensor_count)*tensor_count=0; if(tensor_bytes)*tensor_bytes=0; return; }
+    g_vulkan.stats(device, tensor_count, tensor_bytes);
+}
+
+void coli_vulkan_group_stats(uint64_t *calls, uint64_t *experts, uint64_t *rows,
+                           double *h2d_ms, double *kernel_ms, double *d2h_ms){
+    if(!g_vulkan.available){
+        if(calls)*calls=0; if(experts)*experts=0; if(rows)*rows=0;
+        if(h2d_ms)*h2d_ms=0; if(kernel_ms)*kernel_ms=0; if(d2h_ms)*d2h_ms=0;
+        return;
+    }
+    g_vulkan.group_stats(calls, experts, rows, h2d_ms, kernel_ms, d2h_ms);
+}
+
+int coli_vulkan_expert_mlp(ColiVulkanTensor *gate, ColiVulkanTensor *up,
+                         ColiVulkanTensor *down, float *y, const float *x, int S){
+    if(!g_vulkan.available) return 0;
+    return g_vulkan.expert_mlp(gate, up, down, y, x, S);
+}
+
+int coli_vulkan_expert_group(ColiVulkanTensor *const *gates, ColiVulkanTensor *const *ups,
+                           ColiVulkanTensor *const *downs, const int *rows, int count,
+                           float *y, const float *x){
+    if(!g_vulkan.available) return 0;
+    return g_vulkan.expert_group(gates, ups, downs, rows, count, y, x);
+}
+
+int coli_vulkan_attention_absorb(ColiVulkanTensor *kv_b, float *ctx, const float *q,
+                               const float *latent, const float *rope, int H, int Q,
+                               int R, int V, int K, int T, float attention_scale){
+    if(!g_vulkan.available) return 0;
+    return g_vulkan.attention_absorb(kv_b, ctx, q, latent, rope, H, Q, R, V, K, T, attention_scale);
+}
+
+int coli_vulkan_tensor_upload(ColiVulkanTensor **tensor, const void *weights,
+                            const float *scales, int fmt, int I, int O, int device){
+    if(!g_vulkan.available) return 0;
+    return g_vulkan.tensor_upload(tensor, weights, scales, fmt, I, O, device);
+}
+
+int coli_vulkan_matmul(ColiVulkanTensor **tensor, float *y, const float *x,
+                     const void *weights, const float *scales,
+                     int fmt, int S, int I, int O, int device){
+    if(!g_vulkan.available) return 0;
+    return g_vulkan.matmul(tensor, y, x, weights, scales, fmt, S, I, O, device);
+}
+
+void coli_vulkan_tensor_free(ColiVulkanTensor *tensor){
+    if(g_vulkan.available && g_vulkan.tensor_free) g_vulkan.tensor_free(tensor);
+}
+
+size_t coli_vulkan_tensor_bytes(const ColiVulkanTensor *tensor){
+    if(!g_vulkan.available) return 0;
+    return g_vulkan.tensor_bytes(tensor);
+}
+
+int coli_vulkan_tensor_device(const ColiVulkanTensor *tensor){
+    if(!g_vulkan.available) return -1;
+    return g_vulkan.tensor_device(tensor);
+}
+
+/* ---- #111 pipeline wrappers ---- */
+
+
+/* ---- #111 pipeline wrappers (see header for semantics) ---- */
+
+int coli_vulkan_attention_absorb_batch(ColiVulkanTensor *kv_b,float *ctx,const float *q, const float *latent,const float *rope,int S, int H,int Q,int R,int V,int K,int T, float attention_scale){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.attention_absorb_batch(kv_b, ctx, q, latent, rope, S, H, Q, R, V, K, T, attention_scale);
+}
+
+int coli_vulkan_attention_absorb_batch_dev(ColiVulkanTensor *kv_b_shard,float *ctx_dev, const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.attention_absorb_batch_dev(kv_b_shard, ctx_dev, q_dev, latent_dev, rope_dev, S, H, Q, R, V, K, T, scale);
+}
+
+int coli_vulkan_attention_absorb_kvdev(ColiVulkanTensor *kv_b,float *ctx,const float *q, const float *latent_dev,const float *rope_dev,int H,int Q,int R,int V,int K,int T, float scale){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.attention_absorb_kvdev(kv_b, ctx, q, latent_dev, rope_dev, H, Q, R, V, K, T, scale);
+}
+
+int coli_vulkan_attention_project_batch(ColiVulkanTensor *kv_b,ColiVulkanTensor *o_proj, float *out,const float *q,const float *latent, const float *rope,int S,int H,int Q,int R, int V,int K,int T,float attention_scale){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.attention_project_batch(kv_b, o_proj, out, q, latent, rope, S, H, Q, R, V, K, T, attention_scale);
+}
+
+int coli_vulkan_attention_project_batch_dev(ColiVulkanTensor *kv_b,ColiVulkanTensor *o_proj, float *out,const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.attention_project_batch_dev(kv_b, o_proj, out, q_dev, latent_dev, rope_dev, S, H, Q, R, V, K, T, scale);
+}
+
+int coli_vulkan_attention_project_batch_dev_out(ColiVulkanTensor *kv_b,ColiVulkanTensor *o_proj, float *out_dev,const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.attention_project_batch_dev_out(kv_b, o_proj, out_dev, q_dev, latent_dev, rope_dev, S, H, Q, R, V, K, T, scale);
+}
+
+int coli_vulkan_pipe_add(int device,float *x_dev,const float *t_dev,size_t n){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_add(device, x_dev, t_dev, n);
+}
+
+void * coli_vulkan_pipe_alloc(int device,size_t bytes){
+    if(!g_vulkan.available){ return NULL; }
+    return g_vulkan.pipe_alloc(device, bytes);
+}
+
+int coli_vulkan_pipe_copy2d(int device,float *dst,int dpitch,const float *src, int spitch,int width,int height){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_copy2d(device, dst, dpitch, src, spitch, width, height);
+}
+
+int coli_vulkan_pipe_download(int device,const void *src,void *dst,size_t bytes){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_download(device, src, dst, bytes);
+}
+
+void coli_vulkan_pipe_free(int device,void *p){
+    if(!g_vulkan.available){ return; }
+    g_vulkan.pipe_free(device, p);
+}
+
+int coli_vulkan_pipe_gemm(ColiVulkanTensor *t,float *y_dev,const float *x_dev,int S){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_gemm(t, y_dev, x_dev, S);
+}
+
+int coli_vulkan_pipe_peer_copy(int dst_dev,float *dst,int src_dev, const float *src,size_t bytes){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_peer_copy(dst_dev, dst, src_dev, src, bytes);
+}
+
+int coli_vulkan_pipe_rmsnorm(int device,float *y_dev,const float *x_dev, const float *w_dev,int S,int D,float eps){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_rmsnorm(device, y_dev, x_dev, w_dev, S, D, eps);
+}
+
+int coli_vulkan_pipe_rmsnorm_s(int device,float *y_dev,const float *x_dev, const float *w_dev,int S,int D,float eps, int xstride,int ystride){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_rmsnorm_s(device, y_dev, x_dev, w_dev, S, D, eps, xstride, ystride);
+}
+
+int coli_vulkan_pipe_rope(int device,float *v_dev,const int *pos_dev,int rows, int stride,int offset,int R,int heads,float theta){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_rope(device, v_dev, pos_dev, rows, stride, offset, R, heads, theta);
+}
+
+int coli_vulkan_pipe_rope_base(int device,float *v_dev,int pos_base,int rows, int stride,int offset,int R,int heads,float theta){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_rope_base(device, v_dev, pos_base, rows, stride, offset, R, heads, theta);
+}
+
+int coli_vulkan_pipe_rows_add(int device,float *x_dev,const float *partial_dev, const int *rows_dev,int nrows,int D){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_rows_add(device, x_dev, partial_dev, rows_dev, nrows, D);
+}
+
+float * coli_vulkan_pipe_scratch(int device,int slot,size_t bytes){
+    if(!g_vulkan.available){ return NULL; }
+    return g_vulkan.pipe_scratch(device, slot, bytes);
+}
+
+int coli_vulkan_pipe_silu_mul(int device,float *gate_dev,const float *up_dev,size_t n){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_silu_mul(device, gate_dev, up_dev, n);
+}
+
+int coli_vulkan_pipe_sync(int device){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_sync(device);
+}
+
+int coli_vulkan_pipe_upload(int device,void *dst,const void *src,size_t bytes){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.pipe_upload(device, dst, src, bytes);
+}
+
+int coli_vulkan_shared_mlp_w4a16(ColiVulkanTensor *gate, ColiVulkanTensor *up, ColiVulkanTensor *down, float *y, const float *x, int S){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.shared_mlp_w4a16(gate, up, down, y, x, S);
+}
+
+int coli_vulkan_tensor_update(ColiVulkanTensor *tensor, const void *weights, const float *scales){
+    if(!g_vulkan.available){ return 0; }
+    return g_vulkan.tensor_update(tensor, weights, scales);
+}
+
 
 #endif /* _WIN32 */
