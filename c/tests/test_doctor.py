@@ -81,7 +81,7 @@ class DoctorTest(unittest.TestCase):
         self.assertEqual(report["schema_version"], 1)
         self.assertEqual(report["status"], "ok")
         self.assertIsNotNone(report["plan"])
-        self.assertEqual(checks["accelerator.cuda"]["status"], "skip")
+        self.assertEqual(checks["accelerator.gpu"]["status"], "skip")
         self.assertEqual(checks["memory.ram"]["status"], "pass")
         self.assertEqual(checks["model.shards"]["details"]["shards"], 1)
         self.assertEqual(exit_code(report), 0)
@@ -117,7 +117,7 @@ class DoctorTest(unittest.TestCase):
 
     def test_requested_missing_gpu_is_a_failure(self):
         report = self.report(gpu_indices=[1])
-        check = self.checks_by_id(report)["accelerator.cuda"]
+        check = self.checks_by_id(report)["accelerator.gpu"]
 
         self.assertEqual(check["status"], "fail")
         self.assertEqual(check["details"], {"requested": [1], "detected": []})
@@ -127,7 +127,7 @@ class DoctorTest(unittest.TestCase):
         gpu = {"index": 0, "name": "fixture", "total_bytes": 12 * GB,
                "free_bytes": 10 * GB}
         report = self.report(gpu_indices=None, gpus=[gpu])
-        check = self.checks_by_id(report)["accelerator.cuda"]
+        check = self.checks_by_id(report)["accelerator.gpu"]
 
         self.assertEqual(check["status"], "warn")
         self.assertEqual(report["status"], "warning")
@@ -140,7 +140,7 @@ class DoctorTest(unittest.TestCase):
                              linkage={"linked": False, "missing": True})
 
         self.assertEqual(
-            self.checks_by_id(report)["accelerator.cuda"]["summary"],
+            self.checks_by_id(report)["accelerator.gpu"]["summary"],
             "CUDA runtime library is missing",
         )
         self.assertEqual(report["status"], "error")
