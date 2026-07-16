@@ -4948,7 +4948,7 @@ int main(int argc, char **argv){
      *
      * Must remain the FIRST statement in main(): argv is passed verbatim to execv(). */
     if(!getenv("COLI_OMP_TUNED") && !getenv("COLI_NO_OMP_TUNE") &&
-       !getenv("COLI_CUDA") && !getenv("COLI_METAL")){
+       !getenv("COLI_CUDA") && !getenv("COLI_SYCL") && !getenv("COLI_VULKAN") && !getenv("COLI_METAL")){
         setenv("OMP_WAIT_POLICY","active",0);  /* keep the team hot across the tiny per-expert matmul regions */
         setenv("GOMP_SPINCOUNT","200000",0);   /* spin briefly, then yield so long disk waits don't burn a core */
         setenv("OMP_PROC_BIND","close",0);     /* pack the team onto adjacent cores for cache locality */
@@ -5053,7 +5053,9 @@ int main(int argc, char **argv){
         fprintf(stderr,"KV_SLOTS must be between 1 and 16\n"); return 2;
     }
 #ifdef COLI_CUDA
-    if(getenv("COLI_CUDA") && atoi(getenv("COLI_CUDA"))){
+    if((getenv("COLI_CUDA") && atoi(getenv("COLI_CUDA"))) ||
+       (getenv("COLI_SYCL") && atoi(getenv("COLI_SYCL"))) ||
+       (getenv("COLI_VULKAN") && atoi(getenv("COLI_VULKAN")))){
         const char *one=getenv("COLI_GPU"), *many=getenv("COLI_GPUS");
         if(one&&many){ fprintf(stderr,"use COLI_GPU or COLI_GPUS, not both\n"); return 2; }
         if(many) g_cuda_ndev=parse_cuda_devices(many,g_cuda_devices);
@@ -5079,11 +5081,13 @@ int main(int argc, char **argv){
         g_cuda_release_host?"; VRAM experts without host backing":"");
 #else
     if((getenv("COLI_CUDA") && atoi(getenv("COLI_CUDA"))) ||
+       (getenv("COLI_SYCL") && atoi(getenv("COLI_SYCL"))) ||
+       (getenv("COLI_VULKAN") && atoi(getenv("COLI_VULKAN"))) ||
        getenv("COLI_GPU") || getenv("COLI_GPUS") ||
        (getenv("CUDA_DENSE") && atoi(getenv("CUDA_DENSE"))) ||
         (getenv("CUDA_EXPERT_GB") &&
         (!strcmp(getenv("CUDA_EXPERT_GB"),"auto")||atof(getenv("CUDA_EXPERT_GB"))>0))){
-        fprintf(stderr,"CUDA was requested, but this binary is CPU-only; rebuild with: make CUDA=1\n");
+        fprintf(stderr,"GPU was requested, but this binary is CPU-only; rebuild with: make CUDA=1, SYCL_DLL=1, or VULKAN_DLL=1\n");
         return 2;
     }
 #endif
