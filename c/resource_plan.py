@@ -145,6 +145,7 @@ def memory_available():
 
 def discover_gpus():
     devices = []
+
     # 1. NVIDIA (via nvidia-smi)
     try:
         command = ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.free",
@@ -165,7 +166,10 @@ def discover_gpus():
     except (OSError, subprocess.SubprocessError):
         pass
 
+    nvidia_names = {d["name"] for d in devices}
+
     # 2. Intel XPU (via sycl-ls)
+    sycl_devices = []
     try:
         result = subprocess.run(["sycl-ls"], text=True, capture_output=True, check=True, timeout=5)
         xpu_index = 0
@@ -176,16 +180,79 @@ def discover_gpus():
             # Example output: [ext_oneapi_level_zero:gpu:0] Intel(R) Arc(TM) Pro B70 Graphics, Intel(R) Level-Zero 1.3
             if ":gpu:" in line.lower() and "intel" in line.lower():
                 name = line.split("]", 1)[-1].strip()
-                # sycl-ls doesn't give us memory, provide a dummy value or guess?
-                # The engine reads VRAM budget from command-line overrides anyway, so we just
-                # report a small safe dummy base if we can't get actual metrics here.
-                # Actually, build_plan checks for available space, we'll give it a mock amount
-                # but the user must provide --vram for it to be useful.
-                devices.append({"index": xpu_index, "name": name,
-                                "total_bytes": 0, "free_bytes": 0})
-                xpu_index += 1
+                if name not in nvidia_names:
+                    sycl_devices.append({"index": xpu_index, "name": name,
+                                         "total_bytes": 0, "free_bytes": 0})
+                    xpu_index += 1
     except (OSError, subprocess.SubprocessError):
         pass
+
+    devices.extend(sycl_devices)
+    sycl_names = {d["name"] for d in sycl_devices}
+
+    # 3. Vulkan (via vulkaninfo)
+    vk_devices = []
+    try:
+        result = subprocess.run(["vulkaninfo", "--summary"], text=True, capture_output=True, check=True, timeout=5)
+        vk_index = 0
+        if devices:
+            vk_index = max(d["index"] for d in devices) + 1
+
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("deviceName"):
+                name = line.split("=", 1)[-1].strip()
+                if name not in nvidia_names and name not in sycl_names:
+                    vk_devices.append({"index": vk_index, "name": name,
+                                       "total_bytes": 0, "free_bytes": 0})
+                    vk_index += 1
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    devices.extend(vk_devices)
+    vk_names = {d["name"] for d in vk_devices}
+
+    # 4. Apple Metal (via system_profiler)
+    metal_devices = []
+    if sys.platform == "darwin":
+        try:
+            result = subprocess.run(["system_profiler", "SPDisplaysDataType"], text=True, capture_output=True, check=True, timeout=5)
+            metal_index = 0
+            if devices:
+                metal_index = max(d["index"] for d in devices) + 1
+
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("Chipset Model:"):
+                    name = line.split(":", 1)[-1].strip()
+                    if name not in nvidia_names and name not in sycl_names and name not in vk_names:
+                        metal_devices.append({"index": metal_index, "name": name,
+                                              "total_bytes": 0, "free_bytes": 0})
+                        metal_index += 1
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    devices.extend(metal_devices)
+    metal_names = {d["name"] for d in metal_devices}
+
+    # 5. Windows fallback (via wmic)
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(["wmic", "path", "win32_VideoController", "get", "name"], text=True, capture_output=True, check=True, timeout=5)
+            wmic_index = 0
+            if devices:
+                wmic_index = max(d["index"] for d in devices) + 1
+
+            lines = result.stdout.strip().splitlines()
+            if len(lines) > 1:
+                for line in lines[1:]:
+                    name = line.strip()
+                    if name and name not in nvidia_names and name not in sycl_names and name not in vk_names and name not in metal_names:
+                        devices.append({"index": wmic_index, "name": name,
+                                        "total_bytes": 0, "free_bytes": 0})
+                        wmic_index += 1
+        except (OSError, subprocess.SubprocessError):
+            pass
 
     return devices
 

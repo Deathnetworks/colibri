@@ -105,17 +105,17 @@ def run_doctor(model, ram_gb=0, context=4096, gpu_indices=None, vram_gb=0, *,
     elif gpu_indices is not None and any(gpu["name"].startswith("Mock GPU") for gpu in selected_gpus):
         checks.append(_check("accelerator.gpu", "fail", "one or more requested GPUs were not detected",
                              requested=gpu_indices, detected=[gpu["index"] for gpu in detected_gpus if not gpu["name"].startswith("Mock GPU")]))
-    elif selected_gpus and linkage.get("missing") and not any("Intel" in gpu["name"] for gpu in selected_gpus):
+    elif selected_gpus and linkage.get("missing") and not any(any(vendor in gpu["name"].lower() for vendor in ["intel", "amd", "radeon", "apple", "m1", "m2", "m3", "m4", "arc"]) for gpu in selected_gpus):
         checks.append(_check("accelerator.gpu", "fail", "CUDA runtime library is missing"))
     elif selected_gpus and linkage.get("linked"):
         checks.append(_check("accelerator.gpu", "pass", "CUDA engine and devices are available",
                              devices=[gpu["index"] for gpu in selected_gpus]))
     elif selected_gpus:
         # If it's not a CUDA GPU, then having no CUDA linkage is totally fine.
-        # Check if we have XPU devices. If so, and we didn't fail missing, it's just a non-CUDA setup
-        is_xpu = any("Intel" in gpu["name"] for gpu in selected_gpus)
-        if is_xpu:
-            checks.append(_check("accelerator.gpu", "pass", "XPU engine and devices are available",
+        # Check if we have XPU, AMD/Vulkan or Metal devices.
+        is_alt_gpu = any(any(vendor in gpu["name"].lower() for vendor in ["intel", "amd", "radeon", "apple", "m1", "m2", "m3", "m4", "arc"]) for gpu in selected_gpus)
+        if is_alt_gpu:
+            checks.append(_check("accelerator.gpu", "pass", "Alternative GPU engine and devices are available",
                                  devices=[gpu["index"] for gpu in selected_gpus]))
         else:
             checks.append(_check("accelerator.gpu", "warn", "GPU detected but the engine is CPU-only",
