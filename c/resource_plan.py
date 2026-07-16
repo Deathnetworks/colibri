@@ -144,25 +144,49 @@ def memory_available():
 
 
 def discover_gpus():
-    command = ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.free",
-               "--format=csv,noheader,nounits"]
-    try:
-        result = subprocess.run(command, text=True, capture_output=True, check=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return []
     devices = []
-    import csv
-    for fields in csv.reader(result.stdout.splitlines()):
-        fields = [f.strip() for f in fields]
-        if len(fields) != 4:
-            continue
-        try:
-            index, total, free = int(fields[0]), int(fields[2]), int(fields[3])
-        except ValueError:
-            continue
-        devices.append({"index": index, "name": fields[1],
-                        "total_bytes": total * 1024 * 1024,
-                        "free_bytes": free * 1024 * 1024})
+    # 1. NVIDIA (via nvidia-smi)
+    try:
+        command = ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.free",
+                   "--format=csv,noheader,nounits"]
+        result = subprocess.run(command, text=True, capture_output=True, check=True, timeout=5)
+        import csv
+        for fields in csv.reader(result.stdout.splitlines()):
+            fields = [f.strip() for f in fields]
+            if len(fields) != 4:
+                continue
+            try:
+                index, total, free = int(fields[0]), int(fields[2]), int(fields[3])
+                devices.append({"index": index, "name": fields[1],
+                                "total_bytes": total * 1024 * 1024,
+                                "free_bytes": free * 1024 * 1024})
+            except ValueError:
+                continue
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    # 2. Intel XPU (via sycl-ls)
+    try:
+        result = subprocess.run(["sycl-ls"], text=True, capture_output=True, check=True, timeout=5)
+        xpu_index = 0
+        if devices:
+            xpu_index = max(d["index"] for d in devices) + 1
+
+        for line in result.stdout.splitlines():
+            # Example output: [ext_oneapi_level_zero:gpu:0] Intel(R) Arc(TM) Pro B70 Graphics, Intel(R) Level-Zero 1.3
+            if ":gpu:" in line.lower() and "intel" in line.lower():
+                name = line.split("]", 1)[-1].strip()
+                # sycl-ls doesn't give us memory, provide a dummy value or guess?
+                # The engine reads VRAM budget from command-line overrides anyway, so we just
+                # report a small safe dummy base if we can't get actual metrics here.
+                # Actually, build_plan checks for available space, we'll give it a mock amount
+                # but the user must provide --vram for it to be useful.
+                devices.append({"index": xpu_index, "name": name,
+                                "total_bytes": 0, "free_bytes": 0})
+                xpu_index += 1
+    except (OSError, subprocess.SubprocessError):
+        pass
+
     return devices
 
 
@@ -204,6 +228,18 @@ def build_plan(model, ram_gb=0, context=4096, gpu_indices=None, vram_gb=0,
     gpus = discover_gpus() if gpus is None else gpus
     if gpu_indices is not None:
         wanted = set(gpu_indices)
+        detected_indices = {gpu["index"] for gpu in gpus}
+
+        # Inject dummy GPUs for requested indices that weren't discovered
+        for idx in wanted:
+            if idx not in detected_indices:
+                gpus.append({
+                    "index": idx,
+                    "name": f"Mock GPU {idx}",
+                    "total_bytes": 0,
+                    "free_bytes": 0
+                })
+
         gpus = [gpu for gpu in gpus if gpu["index"] in wanted]
 
     ram_budget = int(ram_gb * GB) if ram_gb > 0 else int(available_memory * 0.88)
@@ -226,11 +262,20 @@ def build_plan(model, ram_gb=0, context=4096, gpu_indices=None, vram_gb=0,
     reserve = 2 * GB
     gpu_plan = []
     safe_vram = 0
+    requested_vram = int(vram_gb * GB) if vram_gb > 0 else 0
+
     for gpu in gpus:
-        usable = max(0, gpu["free_bytes"] - reserve)
+        if gpu["free_bytes"] > 0:
+            usable = max(0, gpu["free_bytes"] - reserve)
+        else:
+            # For mock GPUs or those where we can't get free_bytes (like sycl-ls output)
+            usable = max(0, requested_vram - reserve) if requested_vram > 0 else 0
+
         safe_vram += usable
         gpu_plan.append(dict(gpu, reserve_bytes=reserve, usable_bytes=usable))
-    requested_vram = int(vram_gb * GB) if vram_gb > 0 else safe_vram
+
+    if vram_gb <= 0:
+        requested_vram = safe_vram
     # VRAM-resident experts do not need duplicate RAM backing: the checkpoint is
     # their recovery source. RAM is therefore an independent warm compute tier.
     vram_budget = min(requested_vram, safe_vram, info["expert_bytes"])
@@ -242,7 +287,7 @@ def build_plan(model, ram_gb=0, context=4096, gpu_indices=None, vram_gb=0,
     warnings = []
     if cap < 1:
         warnings.append("RAM budget cannot hold one expert slot per sparse layer")
-    if gpu_indices is not None and len(gpus) != len(set(gpu_indices)):
+    if gpu_indices is not None and any(gpu["name"].startswith("Mock GPU") for gpu in gpus):
         warnings.append("one or more requested GPUs were not detected")
     if gpus and vram_budget < requested_vram:
         warnings.append("VRAM tier was clamped by free VRAM or model expert size")
@@ -335,7 +380,7 @@ def format_plan(plan):
         lines.append(f"VRAM   {format_bytes(vram['budget_bytes'])} hot tier · "
                      f"~{vram['expert_capacity']} experts · {names}")
     else:
-        lines.append("VRAM   no NVIDIA device detected · CPU path")
+        lines.append("VRAM   no GPU detected · CPU path")
     lines.append(f"limit  {plan['expected_bottleneck']}")
     lines.extend(f"warn   {warning}" for warning in plan["warnings"])
     return "\n".join(lines)

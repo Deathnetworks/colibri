@@ -86,7 +86,11 @@ class ResourcePlanTest(unittest.TestCase):
         gpus = [{"index": 0, "name": "a", "total_bytes": 8 * GB, "free_bytes": 8 * GB}]
         plan = build_plan(self.model, available_memory=16 * GB, available_disk=1,
                           gpus=gpus, gpu_indices=[1])
-        self.assertEqual(plan["tiers"]["vram"]["devices"], [])
+        # We mock requested GPUs now, so it's not empty, but usable_bytes should be 0
+        # (since requested_vram is 0).
+        self.assertEqual(len(plan["tiers"]["vram"]["devices"]), 1)
+        self.assertEqual(plan["tiers"]["vram"]["devices"][0]["index"], 1)
+        self.assertEqual(plan["tiers"]["vram"]["devices"][0]["usable_bytes"], 0)
         self.assertIn("not detected", plan["warnings"][0])
 
     def test_cli_emits_versioned_json(self):
