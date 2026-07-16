@@ -1,3 +1,10 @@
+# Handle OS-specific /dev/null vs nul
+ifeq ($(OS),Windows_NT)
+DEV_NULL := nul
+else
+DEV_NULL := /dev/null
+endif
+
 # --- Target detection ---
 # Ask the compiler what it actually targets (rofl0r's note on #129): a gcc/clang
 # toolchain reports its target triple via `-dumpmachine`, e.g.
@@ -9,7 +16,7 @@
 # per-target below, so probe with the user's CC if they set one, else gcc
 # (present on Linux and mingw, and a clang shim on macOS).
 DETECT_CC := $(if $(filter default,$(origin CC)),gcc,$(CC))
-TRIPLET   := $(shell $(DETECT_CC) -dumpmachine 2>/dev/null)
+TRIPLET   := $(shell $(DETECT_CC) -dumpmachine 2>$(DEV_NULL))
 
 MINGW  := $(findstring mingw,$(TRIPLET))
 CYGWIN := $(findstring cygwin,$(TRIPLET))
@@ -36,7 +43,7 @@ ifneq (,$(DARWIN))
 # (brew install libomp), altrimenti compila single-thread (i pragma omp sono ignorati).
 # Niente -march: su arm64 NEON e' baseline (i kernel __ARM_NEON si attivano da soli).
 CC      = clang
-OMPDIR := $(shell brew --prefix libomp 2>/dev/null)
+OMPDIR := $(shell brew --prefix libomp 2>$(DEV_NULL))
 ifneq ($(OMPDIR),)
 OMPC    = -Xclang -fopenmp -I$(OMPDIR)/include
 OMPL    = -L$(OMPDIR)/lib -lomp
