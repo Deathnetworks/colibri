@@ -38,6 +38,38 @@
 #endif
 #include "st.h"
 #include "glm_rebar.h"
+
+void* engine_alloc_mapped(size_t bytes, void** device_ptr) {
+#ifdef COLI_CUDA
+    if (g_cuda_enabled) return coli_cuda_alloc_mapped(bytes, device_ptr);
+#endif
+#ifdef COLI_SYCL
+    if (g_cuda_enabled) return coli_sycl_alloc_mapped(bytes, device_ptr);
+#endif
+#ifdef COLI_METAL
+    if (g_metal_enabled) return coli_metal_alloc_mapped(bytes, device_ptr);
+#endif
+#ifdef COLI_VULKAN
+    if (g_cuda_enabled) return coli_vulkan_alloc_mapped(bytes, device_ptr);
+#endif
+    return NULL;
+}
+
+void engine_free_mapped(void* host_ptr) {
+#ifdef COLI_CUDA
+    if (g_cuda_enabled) { coli_cuda_free_mapped(host_ptr); return; }
+#endif
+#ifdef COLI_SYCL
+    if (g_cuda_enabled) { coli_sycl_free_mapped(host_ptr); return; }
+#endif
+#ifdef COLI_METAL
+    if (g_metal_enabled) { coli_metal_free_mapped(host_ptr); return; }
+#endif
+#ifdef COLI_VULKAN
+    if (g_cuda_enabled) { coli_vulkan_free_mapped(host_ptr); return; }
+#endif
+}
+
 #include "async_io.h"
 #include "tok.h"
 #include "tier.h"
@@ -262,7 +294,7 @@ static void hwinfo_emit(Model *m);
 static int g_repin;
 static uint64_t g_last_repin;
 #ifdef COLI_CUDA
-int g_cuda_enabled;
+static int g_cuda_enabled;
 static double g_cuda_expert_gb;
 static int g_cuda_expert_auto;
 static int g_cuda_dense;
@@ -3144,46 +3176,16 @@ static void layer_forward_rows(Model *m, Layer *l, int li, float *x, int S, int 
         }
     }
 #endif
-
-    /* Decoupled Attention & FFN Pipeline Overlap */
-
-    /* 1. Pre-attention norm */
     for(int s=0;s<S;s++) rmsnorm(nrm+(int64_t)s*D, x+(int64_t)s*D, l->in_ln, D, c->eps);
-
-    /* 2. Launch GPU Attention asynchronously */
     attention_rows(m,l,li,nrm,S,pos_base,kvs,positions,tmp);
-
-    /* 3. Pre-fetch FFN weights for NEXT layer (if applicable) */
+    for(int64_t j=0;j<(int64_t)S*D;j++) x[j]+=tmp[j];
     if(g_pilot && S<=8 && li+1<c->n_layers && m->L[li+1].sparse) pilot_prefetch(m,li+1,x,S);
     if(g_looka && S==1 && li+1<c->n_layers && m->L[li+1].sparse){
-        la_predict(m,li+1,x,1);
-        la_predict(m,li+1,x,2);
+        la_predict(m,li+1,x,1);  /* baseline: stale-state PILOT */
+        la_predict(m,li+1,x,2);  /* two-step: shared-expert-corrected prediction */
     }
-
-    /* 4. Wait for GPU Attention to finish (Sync) */
-#ifdef COLI_CUDA
-    if (g_cuda_enabled) coli_cuda_pipe_sync(0); /* Sync stream */
-#endif
-#ifdef COLI_SYCL
-    if (g_cuda_enabled) coli_sycl_pipe_sync(0);
-#endif
-#ifdef COLI_VULKAN
-    if (g_cuda_enabled) coli_vulkan_pipe_sync(0);
-#endif
-
-    /* Apply Attention residual */
-    for(int64_t j=0;j<(int64_t)S*D;j++) x[j]+=tmp[j];
-
-    /* 5. CPU FFN compute using ReBAR mapped memory */
     for(int s=0;s<S;s++) rmsnorm(nrm+(int64_t)s*D, x+(int64_t)s*D, l->post_ln, D, c->eps);
-
-    if(l->sparse) {
-        moe(m,l,li,nrm,S,tmp,1);
-    } else {
-        dense_mlp(l,nrm,S,D,c->dense_inter,tmp);
-    }
-
-    /* Output of FFN directly written to ReBAR residual */
+    if(l->sparse) moe(m,l,li,nrm,S,tmp,1); else dense_mlp(l,nrm,S,D,c->dense_inter,tmp);
     for(int64_t j=0;j<(int64_t)S*D;j++) x[j]+=tmp[j];
 }
 static void layer_forward(Model *m, Layer *l, int li, float *x, int S, int pos_base, float *nrm, float *tmp){
@@ -3302,7 +3304,7 @@ static void kv_bind(Model *m, KVState *k){
 static void mtp_absorb(Model *m, const int *next_ids, const float *x, int S, int pos_base);
 static float *step(Model *m, const int *ids, int S, int pos_base){
     Cfg *c=&m->c; int D=c->hidden;
-    void* d_residual = NULL; float *x = (float*)engine_alloc_mapped((size_t)S * D * sizeof(float), &d_residual); if (!x) x = falloc((int64_t)S*D);
+    float *x=falloc((int64_t)S*D);
     for(int s=0;s<S;s++) embed_row(m, ids[s], x+(int64_t)s*D);
     layers_forward(m,x,S,pos_base);
     if(m->hlast) memcpy(m->hlast, x+(int64_t)(S-1)*D, D*sizeof(float));
@@ -3311,13 +3313,13 @@ static float *step(Model *m, const int *ids, int S, int pos_base){
     double th0=now_s();
     float *logit=falloc(c->vocab); matmul_qt(logit,last,&m->lm_head,1);
     m->t_head += now_s()-th0;
-    if (d_residual) engine_free_mapped(x); else free(x); free(last); return logit;
+    free(x); free(last); return logit;
 }
 
 /* come step(), ma ritorna i logits di TUTTE le S posizioni [S,vocab] (per la verifica spec) */
 static float *step_all(Model *m, const int *ids, int S, int pos_base){
     Cfg *c=&m->c; int D=c->hidden;
-    void* d_residual = NULL; float *x = (float*)engine_alloc_mapped((size_t)S * D * sizeof(float), &d_residual); if (!x) x = falloc((int64_t)S*D);
+    float *x=falloc((int64_t)S*D);
     for(int s=0;s<S;s++) embed_row(m, ids[s], x+(int64_t)s*D);
     layers_forward(m,x,S,pos_base);
     if(m->h_all) memcpy(m->h_all, x, (int64_t)S*D*sizeof(float));   /* hidden di TUTTE le pos (S<=64) */
@@ -3325,7 +3327,7 @@ static float *step_all(Model *m, const int *ids, int S, int pos_base){
     float *lo=falloc((int64_t)S*c->vocab), *row=falloc(D);
     for(int s=0;s<S;s++){ rmsnorm(row, x+(int64_t)s*D, m->final_norm, D, c->eps);
         matmul_qt(lo+(int64_t)s*c->vocab, row, &m->lm_head, 1); }
-    if (d_residual) engine_free_mapped(x); else free(x); free(row); return lo;
+    free(x); free(row); return lo;
 }
 
 /* One decode token from each independent sequence, evaluated as a single MoE
@@ -3335,20 +3337,20 @@ static float *step_decode_batch(Model *m, const DecodeRow *rows, int S){
     /* Ragged KV currently uses MLA absorption; the stack kernel is sized to 512. */
     if(!rows || S<1 || S>64 || c->kv_lora>512) return NULL;
     KVState *kvs[64]; int positions[64];
-    void* d_residual = NULL; float *x = (float*)engine_alloc_mapped((size_t)S * D * sizeof(float), &d_residual); if (!x) x = falloc((int64_t)S*D);
+    float *x=falloc((int64_t)S*D);
     for(int s=0;s<S;s++){
         if(!rows[s].kv || !rows[s].kv->Lc || !rows[s].kv->Rc || !rows[s].kv->kv_start ||
            rows[s].token<0 || rows[s].token>=c->vocab ||
            rows[s].pos<0 || rows[s].pos>=rows[s].kv->max_t){
-            if (d_residual) engine_free_mapped(x); else free(x); return NULL;
+            free(x); return NULL;
         }
         for(int l=0;l<c->n_layers;l++){
             if(!rows[s].kv->Lc[l] || !rows[s].kv->Rc[l] ||
                rows[s].kv->kv_start[l]<0 || rows[s].kv->kv_start[l]>rows[s].pos ||
                (m->has_dsa && c->idx_type[l] &&
-                (!rows[s].kv->Ic || !rows[s].kv->Ic[l]))){ if (d_residual) engine_free_mapped(x); else free(x); return NULL; }
+                (!rows[s].kv->Ic || !rows[s].kv->Ic[l]))){ free(x); return NULL; }
         }
-        for(int p=0;p<s;p++) if(rows[p].kv==rows[s].kv){ if (d_residual) engine_free_mapped(x); else free(x); return NULL; }
+        for(int p=0;p<s;p++) if(rows[p].kv==rows[s].kv){ free(x); return NULL; }
         kvs[s]=rows[s].kv; positions[s]=rows[s].pos;
         embed_row(m,rows[s].token,x+(int64_t)s*D);
     }
@@ -3360,7 +3362,7 @@ static float *step_decode_batch(Model *m, const DecodeRow *rows, int S){
     float *logit=falloc((int64_t)S*c->vocab);
     matmul_qt(logit,norm,&m->lm_head,S);
     m->t_head+=now_s()-th0;
-    if (d_residual) engine_free_mapped(x); else free(x); free(norm);
+    free(x); free(norm);
     return logit;
 }
 
@@ -3390,7 +3392,7 @@ static int mtp_draft(Model *m, int next_tok, int kv, int G, int *draft){
     Cfg *c=&m->c; int D=c->hidden, li=c->n_layers;
     int p=kv-1; if(p<0||G<1) return 0;
     if(m->kv_start[li]<0 || m->kv_start[li]>p) m->kv_start[li]=p;
-    void* d_residual = NULL; float *x=(float*)engine_alloc_mapped((size_t)D * sizeof(float), &d_residual); if (!x) x = falloc(D); float *cat=falloc(2*D), *hx=falloc(D), *nrm=falloc(D), *tmp=falloc(D);
+    float *x=falloc(D), *cat=falloc(2*D), *hx=falloc(D), *nrm=falloc(D), *tmp=falloc(D);
     float *row=falloc(D), *logit=falloc(c->vocab), *h=falloc(D);
     memcpy(h, m->hlast, D*sizeof(float));
     int tok=next_tok, n=0;
@@ -3420,7 +3422,7 @@ static int mtp_draft(Model *m, int next_tok, int kv, int G, int *draft){
         draft[n++]=t2; tok=t2; memcpy(h, hx, D*sizeof(float));
     }
     m->ld_ctx=0;
-    if (d_residual) engine_free_mapped(x); else free(x); free(cat); free(hx); free(nrm); free(tmp); free(row); free(logit); free(h);
+    free(x); free(cat); free(hx); free(nrm); free(tmp); free(row); free(logit); free(h);
     return n;
 }
 /* assorbe nella KV della testa MTP le coppie VERIFICATE (emb(token@pos+1), h_vero@pos):
@@ -3682,7 +3684,7 @@ static void emit_stream(int t, void *ud){
 static void forward_all(Model *m, const int *ids, int S, int *pred){
     Cfg *c=&m->c; int D=c->hidden;
     kv_alloc(m,S);
-    void* d_residual = NULL; float *x = (float*)engine_alloc_mapped((size_t)S * D * sizeof(float), &d_residual); if (!x) x = falloc((int64_t)S*D);
+    float *x=falloc((int64_t)S*D);
     for(int s=0;s<S;s++) embed_row(m, ids[s], x+(int64_t)s*D);
     layers_forward(m,x,S,0);
     float *lo=falloc(c->vocab);
@@ -3693,7 +3695,7 @@ static void forward_all(Model *m, const int *ids, int S, int *pred){
         int best=0; float bv=lo[0]; for(int i=1;i<c->vocab;i++) if(lo[i]>bv){bv=lo[i];best=i;}
         pred[s]=best;
     }
-    if (d_residual) engine_free_mapped(x); else free(x); free(lo); free(row);
+    free(x); free(lo); free(row);
 }
 
 /* log-prob (log-softmax) del token target dato il vettore di logit; *am=1 se e' l'argmax */
@@ -3741,7 +3743,7 @@ static void run_score(Model *m, const char *snap, const char *path){
         free(ln); }
     if(pfx_on) maxT+=2;   /* le richieste senza prefisso crescono di 2 token */
     kv_alloc(m,maxT);
-    void* d_residual = NULL; float *x=(float*)engine_alloc_mapped((size_t)maxT * D * sizeof(float), &d_residual); if (!x) x = falloc((int64_t)maxT*D); float *lo=falloc(c->vocab), *row=falloc(D);
+    float *x=falloc((int64_t)maxT*D), *lo=falloc(c->vocab), *row=falloc(D);
     int *ids=malloc(maxT*sizeof(int));
     rewind(f); char *ln=NULL; size_t cp=0; int nreq=0; double t0=now_s();
     while(getline(&ln,&cp,f)>0){
@@ -3764,7 +3766,7 @@ static void run_score(Model *m, const char *snap, const char *path){
         if(++nreq%5==0) fprintf(stderr,"[score %d req | %.1fs | RSS %.2f GB | hit %.0f%%]\n",
             nreq, now_s()-t0, rss_gb(), (m->hits+m->miss)?100.0*m->hits/(m->hits+m->miss):0.0);
     }
-    free(ln); free(ids); if (d_residual) engine_free_mapped(x); else free(x); free(lo); free(row); fclose(f);
+    free(ln); free(ids); free(x); free(lo); free(row); fclose(f);
 }
 
 static void generate(Model *m, const int *prompt, int np, int n_new, int *out){
