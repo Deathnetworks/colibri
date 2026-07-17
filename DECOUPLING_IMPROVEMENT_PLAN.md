@@ -56,9 +56,52 @@ Currently, `colibrì` uses `cudaMemcpyAsync` to transfer the residual stream (`q
 
 **Implementation**:
 1.  **Async Double-Buffer Engine (`ffn_async_buffer`)**: Create a structure to manage the double-buffering state, holding file descriptors, aligned buffers (for `O_DIRECT`), active/prefetch indices, and OS-specific async I/O primitives (`io_uring` for Linux, `OVERLAPPED`/`HANDLE` for Windows).
+    ```c
+    typedef struct {
+        int fd;
+        void* buf[2];          // 2x Max layer size, aligned to 4096 (O_DIRECT)
+        int active_idx;
+        int prefetch_idx;
+    #ifdef _WIN32
+        HANDLE iocp;           // Windows IO Completion Port
+        OVERLAPPED ov;
+    #else
+        struct io_uring ring;  // Linux io_uring
+    #endif
+    } ffn_async_buffer;
+    ```
 2.  **Initialization and Allocation**: Implement `ffn_async_init` to set up the `O_DIRECT` file descriptor and allocate two aligned buffers (e.g., using `aligned_alloc_4k` to ensure 4096-byte alignment required by `O_DIRECT`).
 3.  **Async Dispatch (`ffn_async_prefetch`)**: Implement non-blocking read dispatch. On Linux, prepare an `io_uring_sqe` with `io_uring_prep_read` (or `io_uring_prep_read_fixed`) and submit it. On Windows, use `ReadFile` with the `OVERLAPPED` structure, ensuring it returns immediately (e.g., returning `ERROR_IO_PENDING`).
+    ```c
+    void ffn_async_prefetch(ffn_async_buffer* ab, uint64_t offset, size_t size) {
+    #ifdef _WIN32
+        ab->ov.Offset = offset & 0xFFFFFFFF;
+        ab->ov.OffsetHigh = offset >> 32;
+        ReadFile((HANDLE)_get_osfhandle(ab->fd), ab->buf[ab->prefetch_idx], size, NULL, &ab->ov);
+    #else
+        struct io_uring_sqe *sqe = io_uring_get_sqe(&ab->ring);
+        io_uring_prep_read(sqe, ab->fd, ab->buf[ab->prefetch_idx], size, offset);
+        io_uring_submit(&ab->ring);
+    #endif
+    }
+    ```
 4.  **Async Wait & Swap (`ffn_async_swap`)**: Implement the synchronization point to wait for the prefetched buffer to finish loading. Use `io_uring_wait_cqe` on Linux or `GetOverlappedResult` on Windows. Once the read completes, swap the `active_idx` and `prefetch_idx` to ping-pong the buffers.
+    ```c
+    void ffn_async_swap(ffn_async_buffer* ab) {
+    #ifdef _WIN32
+        DWORD bytes;
+        GetOverlappedResult((HANDLE)_get_osfhandle(ab->fd), &ab->ov, &bytes, TRUE);
+    #else
+        struct io_uring_cqe *cqe;
+        io_uring_wait_cqe(&ab->ring, &cqe);
+        io_uring_cqe_seen(&ab->ring, cqe);
+    #endif
+        // Ping-pong buffers
+        int tmp = ab->active_idx;
+        ab->active_idx = ab->prefetch_idx;
+        ab->prefetch_idx = tmp;
+    }
+    ```
 
 ### Step 3: Decoupled Attention & FFN Pipeline Overlap
 
@@ -73,6 +116,32 @@ By restructuring the layer loop, we can execute the GPU Attention block, CPU FFN
     *   **Wait for Layer N FFN**: Wait for the prefetch of Layer N's FFN weights (which was initiated in the *previous* layer's iteration) to complete (`ffn_async_swap`).
     *   **Synchronize GPU**: Wait for the GPU Attention computation for Layer N to finish (`cudaStreamSynchronize`).
     *   **CPU FFN**: Execute the FFN block on the CPU (`llm_compute_ffn_cpu`), reading the weights from the active async buffer and writing the output directly to the ReBAR-mapped residual stream buffer.
+    ```c
+    // Inside the main token generation loop for(layer = 0; layer < N; layer++)
+
+    // 1. Kick off async prefetch for the NEXT layer's FFN weights
+    if (layer + 1 < N) {
+        ffn_async_prefetch(async_buf, ffn_offsets[layer + 1], ffn_sizes[layer + 1]);
+    }
+
+    // 2. GPU computes Attention for CURRENT layer
+    // (This runs asynchronously on the CUDA stream)
+    coli_cuda_attention_absorb_batch_dev(..., d_residual);
+
+    // 3. Wait for PREVIOUS layer's FFN prefetch to complete (if layer > 0)
+    // For layer 0, we synchronously loaded it before the loop.
+    ffn_async_swap(async_buf);
+
+    // 4. Synchronize GPU (Wait for Attention to finish)
+    cudaStreamSynchronize(stream);
+
+    // 5. CPU directly reads/writes residual via ReBAR mapped memory
+    // Compute FFN using CPU RAM weights and ReBAR residual stream
+    llm_compute_ffn_cpu(async_buf->buf[async_buf->active_idx], h_residual);
+
+    // Output of FFN is written directly to h_residual, which is mirrored in VRAM.
+    // Next layer loop begins immediately without DMA copy overhead.
+    ```
 3.  **CPU FFN Implementation**: Implement the CPU-based FFN computation (`llm_compute_ffn_cpu`). This will involve porting the logic from `llama.cpp-PoC` (`src/llama-ffn-local.cpp`), handling dequantization on-the-fly (e.g., Q4 to F32) if necessary, applying RMS normalization, the gate/up projections, the SiLU activation, and the down projection.
 
 ## 3. Potential Challenges & Considerations
