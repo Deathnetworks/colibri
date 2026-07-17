@@ -497,6 +497,8 @@ static struct {
     fn_pipe_upload pipe_upload;
     fn_shared_mlp_w4a16 shared_mlp_w4a16;
     fn_tensor_update tensor_update;
+    void* (*alloc_mapped)(size_t bytes, void** device_ptr);
+    void (*free_mapped)(void* host_ptr);
 } g_sycl;
 static int coli_sycl_load(void){
     if(g_sycl.loaded) return g_sycl.available;
@@ -847,6 +849,8 @@ static struct {
     fn_pipe_upload pipe_upload;
     fn_shared_mlp_w4a16 shared_mlp_w4a16;
     fn_tensor_update tensor_update;
+    void* (*alloc_mapped)(size_t bytes, void** device_ptr);
+    void (*free_mapped)(void* host_ptr);
 } g_vulkan;
 static int coli_vulkan_load(void){
     if(g_vulkan.loaded) return g_vulkan.available;
