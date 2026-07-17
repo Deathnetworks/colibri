@@ -916,10 +916,10 @@ extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_batch_dev_out(Col
 }
 
 extern "C" COLI_SYCL_DLLEXPORT void* coli_sycl_alloc_mapped(size_t bytes, void** device_ptr) {
-    if(g_nctx <= 0) return nullptr;
+    if(g_nctx <= 0 || !g_ctx[0].q) return nullptr;
     // SYCL requires a queue/context to allocate USM memory.
     // We allocate pinned host memory on the primary device's context (device 0).
-    void* host_ptr = sycl::malloc_host(bytes, g_ctx[0].q);
+    void* host_ptr = sycl::malloc_host(bytes, *g_ctx[0].q);
     if(host_ptr) {
         *device_ptr = host_ptr; // In SYCL USM, host pointer acts as device pointer as well for mapped memory
     }
@@ -927,5 +927,5 @@ extern "C" COLI_SYCL_DLLEXPORT void* coli_sycl_alloc_mapped(size_t bytes, void**
 }
 
 extern "C" COLI_SYCL_DLLEXPORT void coli_sycl_free_mapped(void* host_ptr) {
-    if(host_ptr && g_nctx > 0) sycl::free(host_ptr, g_ctx[0].q);
+    if(host_ptr && g_nctx > 0 && g_ctx[0].q) sycl::free(host_ptr, *g_ctx[0].q);
 }
