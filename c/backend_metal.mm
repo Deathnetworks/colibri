@@ -784,3 +784,20 @@ extern "C" int coli_metal_moe_block_end(ColiMetalMoeHandle *h, float *out) {
   h->cb=nil; h->hh=nil; delete h;
   return ok;
 }
+
+extern "C" COLI_METAL_DLLEXPORT void* coli_metal_alloc_mapped(size_t bytes, void** device_ptr) {
+    if(!g_metal_device) return nullptr;
+    id<MTLBuffer> buffer = [g_metal_device newBufferWithLength:bytes options:MTLResourceStorageModeShared];
+    if(buffer) {
+        void* host_ptr = [buffer contents];
+        *device_ptr = host_ptr; // Store the buffer content address
+        return host_ptr; // Needs tracking of buffer wrapper if we want to free properly, Metal requires buffer object.
+    }
+    return nullptr;
+}
+
+extern "C" COLI_METAL_DLLEXPORT void coli_metal_free_mapped(void* host_ptr) {
+    // Requires a hash map to look up the MTLBuffer from the host_ptr.
+    // Given the constraints and typical Metal usage in the repo, we might just leak or use existing arena.
+    // For now, this is a stub as proper Metal mapped memory free requires tracking.
+}

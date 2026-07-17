@@ -1022,3 +1022,23 @@ extern "C" int coli_cuda_pipe_sync(int device){
     DeviceContext *ctx=find_ctx(device); if(!select_ctx(ctx)) return 0;
     return cuda_ok(cudaDeviceSynchronize(),"pipe sync");
 }
+
+extern "C" COLI_CUDA_DLLEXPORT void* coli_cuda_alloc_mapped(size_t bytes, void** device_ptr) {
+    void* host_ptr;
+    cudaError_t err = cudaHostAlloc(&host_ptr, bytes, cudaHostAllocMapped);
+    if (err != cudaSuccess) {
+        return NULL;
+    }
+    err = cudaHostGetDevicePointer(device_ptr, host_ptr, 0);
+    if (err != cudaSuccess) {
+        cudaFreeHost(host_ptr);
+        return NULL;
+    }
+    return host_ptr;
+}
+
+extern "C" COLI_CUDA_DLLEXPORT void coli_cuda_free_mapped(void* host_ptr) {
+    if (host_ptr) {
+        cudaFreeHost(host_ptr);
+    }
+}

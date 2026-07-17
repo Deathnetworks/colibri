@@ -914,3 +914,16 @@ extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_batch_dev_out(Col
     dc->q->wait();
     return 1;
 }
+
+extern "C" COLI_SYCL_DLLEXPORT void* coli_sycl_alloc_mapped(size_t bytes, void** device_ptr) {
+    if(!g_sycl_ctx) return nullptr;
+    void* host_ptr = sycl::malloc_host(bytes, *g_sycl_ctx);
+    if(host_ptr) {
+        *device_ptr = host_ptr; // In SYCL USM, host pointer acts as device pointer as well for mapped memory
+    }
+    return host_ptr;
+}
+
+extern "C" COLI_SYCL_DLLEXPORT void coli_sycl_free_mapped(void* host_ptr) {
+    if(host_ptr && g_sycl_ctx) sycl::free(host_ptr, *g_sycl_ctx);
+}

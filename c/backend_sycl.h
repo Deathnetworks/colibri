@@ -116,3 +116,5 @@ COLI_SYCL_DLLEXPORT int coli_sycl_pipe_sync(int device);
 #endif
 
 #endif
+COLI_SYCL_DLLEXPORT void* coli_sycl_alloc_mapped(size_t bytes, void** device_ptr);
+COLI_SYCL_DLLEXPORT void coli_sycl_free_mapped(void* host_ptr);

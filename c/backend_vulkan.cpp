@@ -46,3 +46,10 @@ int coli_vulkan_attention_absorb_kvdev(ColiVulkanTensor *kv_b,float *ctx,const f
 int coli_vulkan_pipe_peer_copy(int dst_dev,float *dst,int src_dev, const float *src,size_t bytes) { return 0; }
 int coli_vulkan_attention_project_batch_dev_out(ColiVulkanTensor *kv_b,ColiVulkanTensor *o_proj, float *out_dev,const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale) { return 0; }
 int coli_vulkan_pipe_sync(int device) { return 1; }
+
+extern "C" COLI_VULKAN_DLLEXPORT void* coli_vulkan_alloc_mapped(size_t bytes, void** device_ptr) {
+    return nullptr; // Stub for Vulkan
+}
+
+extern "C" COLI_VULKAN_DLLEXPORT void coli_vulkan_free_mapped(void* host_ptr) {
+}
