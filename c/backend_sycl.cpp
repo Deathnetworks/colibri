@@ -10,12 +10,16 @@
 // Dummy SYCL definitions for platforms where SYCL compiler is absent but we want to build the shim
 namespace sycl {
     struct event {
-        void wait() {}
+        void wait() const {}
     };
     struct queue {
-        void wait() {}
+        queue() {}
+        template<typename Property> queue(Property) {}
+        void wait() const {}
         template<typename Range, typename Func>
         event parallel_for(Range r, Func f) { return event{}; }
+        template<typename Func>
+        event submit(Func f) { return event{}; }
         void* get_device() { return nullptr; }
         event memcpy(void* dst, const void* src, size_t size) { return event{}; }
     };
@@ -25,8 +29,60 @@ namespace sycl {
             struct global_mem_size { static const int value = 2; };
         }
     }
-    template<int dim> struct range { range(size_t) {} };
+    namespace property { namespace queue { struct in_order {}; } }
+    template<int dim> struct range { 
+        template<typename... Args> range(Args... args) {}
+    };
     template<int dim> struct id { size_t operator[](int) const { return 0; } };
+    
+    struct group {
+        template<typename T> void barrier(T) const {}
+        size_t get_local_linear_range() const { return 1; }
+        size_t get_local_linear_id() const { return 0; }
+    };
+    
+    struct nd_range_t {
+        template<int dim> nd_range_t(range<dim> global, range<dim> local) {}
+    };
+    template<int dim> struct nd_range : nd_range_t { using nd_range_t::nd_range_t; };
+    
+    template<int dim> struct nd_item {
+        group get_group() const { return group{}; }
+        size_t get_local_id(int) const { return 0; }
+        size_t get_group(int) const { return 0; }
+        template<typename F> void barrier(F) const {}
+    };
+    
+    struct handler {
+        template<int dim, typename Func>
+        void parallel_for(nd_range<dim> r, Func f) {}
+    };
+    
+    template<typename T, int dim=1> struct local_accessor {
+        template<typename H> local_accessor(range<dim>, H&) {}
+        T& operator[](size_t) { static T dummy; return dummy; }
+        T* get_pointer() const { return nullptr; }
+    };
+    
+    namespace access { enum class fence_space { local_space }; }
+    
+    template<typename T=void> struct plus { 
+        T operator()(T a, T b) const { return a + b; } 
+    }; 
+    template<> struct plus<void> { 
+        template<typename T> T operator()(T a, T b) const { return a + b; } 
+    };
+    
+    template<typename T=void> struct maximum { 
+        T operator()(T a, T b) const { return a > b ? a : b; } 
+    }; 
+    template<> struct maximum<void> { 
+        template<typename T> T operator()(T a, T b) const { return a > b ? a : b; } 
+    };
+    
+    template<typename Grp, typename T, typename Op> 
+    T reduce_over_group(Grp g, T x, Op op) { return x; }
+
     float exp(float x) { return std::exp(x); }
     float sqrt(float x) { return std::sqrt(x); }
     float pow(float base, float ex) { return std::pow(base, ex); }
@@ -55,7 +111,7 @@ static float weight_at(const void *weights, int fmt, size_t row, int i) {
 // Context and State Management
 // ---------------------------------------------------------------------------------
 
-struct ColiSyclTensor {
+struct ColiCudaTensor {
     void *weights;
     float *scales;
     size_t weight_bytes;
@@ -192,18 +248,18 @@ extern "C" COLI_SYCL_DLLEXPORT void coli_sycl_group_stats(uint64_t *calls, uint6
 // Memory Uploads and Management
 // ---------------------------------------------------------------------------------
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_tensor_upload(ColiSyclTensor **tensor, const void *weights, const float *scales, int fmt, int I, int O, int device) {
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_tensor_upload(ColiCudaTensor **tensor, const void *weights, const float *scales, int fmt, int I, int O, int device) {
     DeviceContext *ctx = find_ctx(device);
     if (!ctx) return 0;
 
     size_t rb = row_bytes(fmt, I);
     if (!rb || (fmt && !scales)) return 0;
     if (*tensor) {
-        ColiSyclTensor *t = *tensor;
+        ColiCudaTensor *t = *tensor;
         return t->fmt == fmt && t->I == I && t->O == O && t->device == device;
     }
 
-    ColiSyclTensor *t = static_cast<ColiSyclTensor *>(std::calloc(1, sizeof(*t)));
+    ColiCudaTensor *t = static_cast<ColiCudaTensor *>(std::calloc(1, sizeof(*t)));
     if (!t) return 0;
     t->fmt = fmt; t->I = I; t->O = O; t->device = device; t->weight_bytes = rb * (size_t)O;
 
@@ -234,7 +290,7 @@ extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_tensor_upload(ColiSyclTensor **tens
     return 1;
 }
 
-extern "C" COLI_SYCL_DLLEXPORT void coli_sycl_tensor_free(ColiSyclTensor *tensor) {
+extern "C" COLI_SYCL_DLLEXPORT void coli_sycl_tensor_free(ColiCudaTensor *tensor) {
     if (!tensor) return;
     DeviceContext *ctx = find_ctx(tensor->device);
     if (ctx && tensor->tracked) {
@@ -246,17 +302,17 @@ extern "C" COLI_SYCL_DLLEXPORT void coli_sycl_tensor_free(ColiSyclTensor *tensor
     free(tensor);
 }
 
-extern "C" COLI_SYCL_DLLEXPORT size_t coli_sycl_tensor_bytes(const ColiSyclTensor *tensor) {
+extern "C" COLI_SYCL_DLLEXPORT size_t coli_sycl_tensor_bytes(const ColiCudaTensor *tensor) {
     if (!tensor) return 0;
     return tensor->weight_bytes + (tensor->fmt ? (size_t)tensor->O * sizeof(float) : 0);
 }
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_tensor_device(const ColiSyclTensor *tensor) {
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_tensor_device(const ColiCudaTensor *tensor) {
     if (!tensor) return -1;
     return tensor->device;
 }
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_tensor_update(ColiSyclTensor *tensor, const void *weights, const float *scales) {
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_tensor_update(ColiCudaTensor *tensor, const void *weights, const float *scales) {
     if (!tensor || !weights || (tensor->fmt && !scales)) return 0;
     DeviceContext *ctx = find_ctx(tensor->device);
     if (!ctx) return 0;
@@ -482,9 +538,9 @@ extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_pipe_rows_add(int device,float *x_d
 // GEMM and MLPs
 // ---------------------------------------------------------------------------------
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_matmul(ColiSyclTensor **tensor, float *y, const float *x, const void *weights, const float *scales, int fmt, int S, int I, int O, int device) {
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_matmul(ColiCudaTensor **tensor, float *y, const float *x, const void *weights, const float *scales, int fmt, int S, int I, int O, int device) {
     if (S < 1 || !coli_sycl_tensor_upload(tensor, weights, scales, fmt, I, O, device)) return 0;
-    ColiSyclTensor *t = *tensor;
+    ColiCudaTensor *t = *tensor;
     DeviceContext *ctx = find_ctx(t->device);
     if (!ctx) return 0;
 
@@ -520,7 +576,7 @@ extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_matmul(ColiSyclTensor **tensor, flo
     return 1;
 }
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_pipe_gemm(ColiSyclTensor *t,float *y_dev,const float *x_dev,int S) {
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_pipe_gemm(ColiCudaTensor *t,float *y_dev,const float *x_dev,int S) {
     if(!t || S < 1) return 0;
     DeviceContext *ctx = find_ctx(t->device);
     if (!ctx) return 0;
@@ -549,7 +605,7 @@ extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_pipe_gemm(ColiSyclTensor *t,float *
     return 1;
 }
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_expert_mlp(ColiSyclTensor *gate, ColiSyclTensor *up, ColiSyclTensor *down, float *y, const float *x, int S) {
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_expert_mlp(ColiCudaTensor *gate, ColiCudaTensor *up, ColiCudaTensor *down, float *y, const float *x, int S) {
     if (!gate || !up || !down || !x || !y || S < 1 ||
         gate->device != up->device || gate->device != down->device ||
         gate->I != up->I || gate->O != up->O ||
@@ -579,14 +635,14 @@ extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_expert_mlp(ColiSyclTensor *gate, Co
     return 1;
 }
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_shared_mlp_w4a16(ColiSyclTensor *gate, ColiSyclTensor *up, ColiSyclTensor *down, float *y, const float *x, int S) {
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_shared_mlp_w4a16(ColiCudaTensor *gate, ColiCudaTensor *up, ColiCudaTensor *down, float *y, const float *x, int S) {
     // Fall back to the generic pipeline
     return coli_sycl_expert_mlp(gate, up, down, y, x, S);
 }
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_expert_group(ColiSyclTensor *const *gates, ColiSyclTensor *const *ups, ColiSyclTensor *const *downs, const int *rows, int count, float *y, const float *x) {
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_expert_group(ColiCudaTensor *const *gates, ColiCudaTensor *const *ups, ColiCudaTensor *const *downs, const int *rows, int count, float *y, const float *x) {
     if (!gates || !ups || !downs || !rows || !x || !y || count < 1) return 0;
-    ColiSyclTensor *first = gates[0];
+    ColiCudaTensor *first = gates[0];
     if (!first) return 0;
 
     int device = first->device;
@@ -615,9 +671,9 @@ extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_expert_group(ColiSyclTensor *const 
         int r = rows[c];
         if (r == 0) continue;
 
-        ColiSyclTensor* g = gates[c];
-        ColiSyclTensor* u = ups[c];
-        ColiSyclTensor* d = downs[c];
+        ColiCudaTensor* g = gates[c];
+        ColiCudaTensor* u = ups[c];
+        ColiCudaTensor* d = downs[c];
 
         float* x_ptr = ctx->x + offset * D;
         float* g_ptr = ctx->gate + offset * I;
@@ -647,14 +703,107 @@ extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_expert_group(ColiSyclTensor *const 
 
 
 // ---------------------------------------------------------------------------------
+// ---------------------------------------------------------------------------------
 // Attention Primitives
 // ---------------------------------------------------------------------------------
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_absorb_batch_dev(ColiSyclTensor *w,float *ctx_dev, const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale) {
-    return 0; // Return 0 to ensure CPU fallback and prevent silent failures
+static void attention_absorb_batch_kernel(sycl::queue &q, float *ctx, const float *q_dev,
+        const float *latent, const float *rope, const void *weights, const float *wscale,
+        int fmt, int S, int H, int Q, int R, int V, int K, int T, float scale) {
+    size_t rb = row_bytes(fmt, K);
+    
+    // We launch H * S work-groups.
+    sycl::range<2> global_range(S, H * 256);
+    sycl::range<2> local_range(1, 256);
+    
+    q.submit([&](sycl::handler& cgh) {
+        sycl::local_accessor<float, 1> sm(sycl::range<1>(2 * K + T + 256), cgh);
+        
+        cgh.parallel_for(sycl::nd_range<2>(global_range, local_range), [=](sycl::nd_item<2> item) {
+            int s = item.get_group(0);
+            int h = item.get_group(1);
+            int tid = item.get_local_id(1);
+            int nt = T - S + s + 1;
+            int rbase = h * (Q + V);
+            
+            if (s >= S || nt < 1) return;
+            
+            float* qa = sm.get_pointer();
+            float* cl = qa + K;
+            float* scores = cl + K;
+            
+            const float *qs = q_dev + ((size_t)s * H + h) * (Q + R);
+            
+            for(int k = tid; k < K; k += 256) {
+                float a = 0;
+                for(int d = 0; d < Q; d++) {
+                    a += qs[d] * weight_at(weights, fmt, (size_t)(rbase + d) * rb, k) * (fmt ? wscale[rbase + d] : 1.f);
+                }
+                qa[k] = a;
+            }
+            item.barrier(sycl::access::fence_space::local_space);
+            
+            for(int t = tid; t < nt; t += 256) {
+                float a = 0;
+                const float *lt = latent + (size_t)t * K;
+                const float *rt = rope + (size_t)t * R;
+                for(int k = 0; k < K; k++) a += qa[k] * lt[k];
+                for(int d = 0; d < R; d++) a += qs[Q + d] * rt[d];
+                scores[t] = a * scale;
+            }
+            item.barrier(sycl::access::fence_space::local_space);
+            
+            float local_max = -3.402823466e+38F;
+            for(int t = tid; t < nt; t += 256) {
+                local_max = sycl::maximum<float>()(local_max, scores[t]);
+            }
+            float mx = sycl::reduce_over_group(item.get_group(), local_max, sycl::maximum<float>());
+            
+            float local_sum = 0;
+            for(int t = tid; t < nt; t += 256) {
+                float e = sycl::exp(scores[t] - mx);
+                scores[t] = e;
+                local_sum += e;
+            }
+            float sum = sycl::reduce_over_group(item.get_group(), local_sum, sycl::plus<float>());
+            float inv = 1.f / sum;
+            
+            for(int t = tid; t < nt; t += 256) {
+                scores[t] *= inv;
+            }
+            item.barrier(sycl::access::fence_space::local_space);
+            
+            for(int k = tid; k < K; k += 256) {
+                float a = 0;
+                for(int t = 0; t < nt; t++) {
+                    a += scores[t] * latent[(size_t)t * K + k];
+                }
+                cl[k] = a;
+            }
+            item.barrier(sycl::access::fence_space::local_space);
+            
+            for(int v = tid; v < V; v += 256) {
+                int row = rbase + Q + v;
+                float a = 0;
+                for(int k = 0; k < K; k++) {
+                    a += cl[k] * weight_at(weights, fmt, (size_t)row * rb, k);
+                }
+                ctx[((size_t)s * H + h) * V + v] = a * (fmt ? wscale[row] : 1.f);
+            }
+        });
+    });
+}
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_absorb_batch_dev(ColiCudaTensor *w,float *ctx_dev, const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale) {
+    if(!w||!ctx_dev||!q_dev||!latent_dev||!rope_dev||S<1||H<1||Q<1||R<1||V<1||
+       K<1||K>512||T<S||T>8192||w->I!=K||w->O!=H*(Q+V))return 0;
+    DeviceContext *dc = find_ctx(w->device);
+    if (!dc) return 0;
+    attention_absorb_batch_kernel(*dc->q, ctx_dev, q_dev, latent_dev, rope_dev, w->weights, w->scales, w->fmt, S, H, Q, R, V, K, T, scale);
+    dc->q->wait();
+    return 1;
 }
 
-static int attention_absorb_batch_run(ColiSyclTensor *w,ColiSyclTensor *proj, float *out,const float *q,const float *latent,const float *rope,int S,int H,int Q, int R,int V,int K,int T,float scale) {
+static int attention_absorb_batch_run(ColiCudaTensor *w,ColiCudaTensor *proj, float *out,const float *q,const float *latent,const float *rope,int S,int H,int Q, int R,int V,int K,int T,float scale) {
     if(!w||!out||!q||!latent||!rope||H<1||Q<1||R<1||V<1||K<1||T<1||w->I!=K||w->O!=H*(Q+V)) return 0;
     DeviceContext *dc = find_ctx(w->device);
     if (!dc) return 0;
@@ -672,90 +821,8 @@ static int attention_absorb_batch_run(ColiSyclTensor *w,ColiSyclTensor *proj, fl
     dc->q->memcpy(dc->ar, rope, rb_rope);
     dc->q->wait();
 
-    // Since a highly tuned `nd_range` SYCL kernel is complex to dynamically stub,
-    // we use a naive `parallel_for` mapping exactly the math sequence of MLA.
+    attention_absorb_batch_kernel(*dc->q, dc->ac, dc->aq, dc->al, dc->ar, w->weights, w->scales, w->fmt, S, H, Q, R, V, K, T, scale);
 
-    int fmt = w->fmt;
-    const void* weights = w->weights;
-    const float* wscale = w->scales;
-    size_t rb = row_bytes(fmt, K);
-    float* ac = dc->ac;
-    float* aq = dc->aq;
-    float* al = dc->al;
-    float* arope = dc->ar;
-
-    // We launch 1 thread per (S, H, V)
-    dc->q->parallel_for(sycl::range<3>(S, H, V), [=](sycl::id<3> idx) {
-        int s = idx[0];
-        int h = idx[1];
-        int v = idx[2];
-
-        int nt = T - S + s + 1;
-        if (nt <= 0) {
-            ac[(s * H + h) * V + v] = 0;
-            return;
-        }
-
-        int rbase = h * (Q + V);
-        const float *qs = aq + (s * H + h) * (Q + R);
-
-        float qa[512]; // K is guaranteed <= 512
-        for (int k = 0; k < K; k++) {
-            float a = 0;
-            for (int d = 0; d < Q; d++) {
-                a += qs[d] * weight_at(weights, fmt, (rbase + d) * rb, k) * (fmt ? wscale[rbase + d] : 1.0f);
-            }
-            qa[k] = a;
-        }
-
-        // Unfortunately, computing Softmax requires scanning all T for max and sum.
-        // We do this per thread. It's redundant across V but prevents the need for complex workgroups.
-        float mx = -3.402823466e+38F;
-        for (int t = 0; t < nt; t++) {
-            float a = 0;
-            const float* lt = al + t * K;
-            const float* rt = arope + t * R;
-            for (int k = 0; k < K; k++) a += qa[k] * lt[k];
-            for (int d = 0; d < R; d++) a += qs[Q + d] * rt[d];
-            a *= scale;
-            if (a > mx) mx = a;
-        }
-
-        float z = 0;
-        for (int t = 0; t < nt; t++) {
-            float a = 0;
-            const float* lt = al + t * K;
-            const float* rt = arope + t * R;
-            for (int k = 0; k < K; k++) a += qa[k] * lt[k];
-            for (int d = 0; d < R; d++) a += qs[Q + d] * rt[d];
-            a *= scale;
-            z += sycl::exp(a - mx);
-        }
-
-        float cl[512] = {0}; // K <= 512
-        for (int t = 0; t < nt; t++) {
-            float a = 0;
-            const float* lt = al + t * K;
-            const float* rt = arope + t * R;
-            for (int kk = 0; kk < K; kk++) a += qa[kk] * lt[kk];
-            for (int d = 0; d < R; d++) a += qs[Q + d] * rt[d];
-            a *= scale;
-            float score = sycl::exp(a - mx) / z;
-            for (int kk = 0; kk < K; kk++) cl[kk] += score * lt[kk];
-        }
-
-        float v_val = 0;
-        int row = rbase + Q + v;
-        for (int k = 0; k < K; k++) {
-            v_val += cl[k] * weight_at(weights, fmt, row * rb, k);
-        }
-        ac[(s * H + h) * V + v] = v_val * (fmt ? wscale[row] : 1.0f);
-    });
-    // Instead of completing the extremely inefficient naive approach, I will provide the structural hook.
-    // The exact translation of the optimized shared memory kernel should be done using sycl::nd_range
-    // and local_accessors, which is massive. We will assume for this functional step that the structural layout is complete.
-
-    // Proj handling
     float *src = dc->ac;
     size_t ob = cb;
     if (proj) {
@@ -769,25 +836,64 @@ static int attention_absorb_batch_run(ColiSyclTensor *w,ColiSyclTensor *proj, fl
     return 1;
 }
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_absorb_batch(ColiSyclTensor *kv_b,float *ctx,const float *q, const float *latent,const float *rope,int S, int H,int Q,int R,int V,int K,int T, float attention_scale) {
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_absorb_batch(ColiCudaTensor *kv_b,float *ctx,const float *q, const float *latent,const float *rope,int S, int H,int Q,int R,int V,int K,int T, float attention_scale) {
     return attention_absorb_batch_run(kv_b, nullptr, ctx, q, latent, rope, S, H, Q, R, V, K, T, attention_scale);
 }
-
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_batch(ColiSyclTensor *kv_b,ColiSyclTensor *o_proj, float *out,const float *q,const float *latent, const float *rope,int S,int H,int Q,int R, int V,int K,int T,float attention_scale) {
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_batch(ColiCudaTensor *kv_b,ColiCudaTensor *o_proj, float *out,const float *q,const float *latent, const float *rope,int S,int H,int Q,int R, int V,int K,int T,float attention_scale) {
     return attention_absorb_batch_run(kv_b, o_proj, out, q, latent, rope, S, H, Q, R, V, K, T, attention_scale);
 }
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_absorb(ColiSyclTensor *kv_b,float *ctx,const float *q, const float *latent,const float *rope,int H,int Q, int R,int V,int K,int T,float attention_scale) {
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_absorb(ColiCudaTensor *kv_b,float *ctx,const float *q, const float *latent,const float *rope,int H,int Q, int R,int V,int K,int T,float attention_scale) {
     return attention_absorb_batch_run(kv_b, nullptr, ctx, q, latent, rope, 1, H, Q, R, V, K, T, attention_scale);
 }
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_absorb_kvdev(ColiSyclTensor *kv_b,float *ctx,const float *q, const float *latent_dev,const float *rope_dev,int H,int Q,int R,int V,int K,int T, float scale) {
-    return 0; // Not fully mapped for device-only residency but trivially falls back
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_absorb_kvdev(ColiCudaTensor *kv_b,float *ctx,const float *q, const float *latent_dev,const float *rope_dev,int H,int Q,int R,int V,int K,int T, float scale) {
+    if(!kv_b||!ctx||!q||!latent_dev||!rope_dev||H<1||Q<1||R<1||V<1||K<1||K>512||T<1||T>8192||
+       kv_b->I!=K||kv_b->O!=H*(Q+V))return 0;
+    DeviceContext *dc = find_ctx(kv_b->device);
+    if (!dc) return 0;
+    
+    size_t qb = (size_t)H * (Q + R) * sizeof(float);
+    size_t cb = (size_t)H * V * sizeof(float);
+    if (!reserve_buf(dc, &dc->aq, &dc->aq_cap, qb) || !reserve_buf(dc, &dc->ac, &dc->ac_cap, cb)) return 0;
+    
+    dc->q->memcpy(dc->aq, q, qb).wait();
+    attention_absorb_batch_kernel(*dc->q, dc->ac, dc->aq, latent_dev, rope_dev, kv_b->weights, kv_b->scales, kv_b->fmt, 1, H, Q, R, V, K, T, scale);
+    dc->q->memcpy(ctx, dc->ac, cb).wait();
+    return 1;
 }
 
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_batch_dev(ColiSyclTensor *kv_b,ColiSyclTensor *o_proj, float *out,const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale) {
-    return 0;
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_batch_dev(ColiCudaTensor *kv_b,ColiCudaTensor *o_proj, float *out,const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale) {
+    if(!kv_b||!o_proj||!out||!q_dev||!latent_dev||!rope_dev||S<1||H<1||Q<1||R<1||V<1||
+       K<1||K>512||T<S||T>8192||kv_b->I!=K||kv_b->O!=H*(Q+V)||
+       o_proj->device!=kv_b->device||o_proj->I!=H*V)return 0;
+    DeviceContext *dc = find_ctx(kv_b->device);
+    if (!dc) return 0;
+    
+    size_t cb = (size_t)S * H * V * sizeof(float);
+    if (!reserve_buf(dc, &dc->ac, &dc->ac_cap, cb)) return 0;
+    
+    attention_absorb_batch_kernel(*dc->q, dc->ac, q_dev, latent_dev, rope_dev, kv_b->weights, kv_b->scales, kv_b->fmt, S, H, Q, R, V, K, T, scale);
+    
+    size_t ob = (size_t)S * o_proj->O * sizeof(float);
+    if (!reserve_buf(dc, &dc->y, &dc->y_cap, ob)) return 0;
+    
+    coli_sycl_pipe_gemm(o_proj, dc->y, dc->ac, S);
+    dc->q->memcpy(out, dc->y, ob).wait();
+    return 1;
 }
-extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_batch_dev_out(ColiSyclTensor *kv_b,ColiSyclTensor *o_proj, float *out_dev,const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale) {
-    return 0;
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_batch_dev_out(ColiCudaTensor *kv_b,ColiCudaTensor *o_proj, float *out_dev,const float *q_dev,const float *latent_dev,const float *rope_dev, int S,int H,int Q,int R,int V,int K,int T,float scale) {
+    if(!kv_b||!o_proj||!out_dev||!q_dev||!latent_dev||!rope_dev||S<1||H<1||Q<1||R<1||V<1||
+       K<1||K>512||T<S||T>8192||kv_b->I!=K||kv_b->O!=H*(Q+V)||
+       o_proj->device!=kv_b->device||o_proj->I!=H*V)return 0;
+    DeviceContext *dc = find_ctx(kv_b->device);
+    if (!dc) return 0;
+    
+    size_t cb = (size_t)S * H * V * sizeof(float);
+    if (!reserve_buf(dc, &dc->ac, &dc->ac_cap, cb)) return 0;
+    
+    attention_absorb_batch_kernel(*dc->q, dc->ac, q_dev, latent_dev, rope_dev, kv_b->weights, kv_b->scales, kv_b->fmt, S, H, Q, R, V, K, T, scale);
+    coli_sycl_pipe_gemm(o_proj, out_dev, dc->ac, S);
+    dc->q->wait();
+    return 1;
 }
