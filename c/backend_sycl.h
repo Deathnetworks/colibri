@@ -17,6 +17,7 @@ extern "C" {
 #define COLI_SYCL_MAX_DEVICES 16
 
 /* Re-use ColiCudaTensor typedef as an opaque pointer for SYCL to maintain ABI compatibility with backend_loader.c */
+typedef struct ColiCudaTensor ColiSyclTensor;
 typedef struct ColiCudaTensor ColiCudaTensor;
 /* To compile this standalone, we need to forward declare ColiCudaTensor */
 typedef struct ColiCudaTensor ColiCudaTensor;
