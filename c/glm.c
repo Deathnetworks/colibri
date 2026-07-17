@@ -39,37 +39,6 @@
 #include "st.h"
 #include "glm_rebar.h"
 
-void* engine_alloc_mapped(size_t bytes, void** device_ptr) {
-#ifdef COLI_CUDA
-    if (g_cuda_enabled) return coli_cuda_alloc_mapped(bytes, device_ptr);
-#endif
-#ifdef COLI_SYCL
-    if (g_cuda_enabled) return coli_sycl_alloc_mapped(bytes, device_ptr);
-#endif
-#ifdef COLI_METAL
-    if (g_metal_enabled) return coli_metal_alloc_mapped(bytes, device_ptr);
-#endif
-#ifdef COLI_VULKAN
-    if (g_cuda_enabled) return coli_vulkan_alloc_mapped(bytes, device_ptr);
-#endif
-    return NULL;
-}
-
-void engine_free_mapped(void* host_ptr) {
-#ifdef COLI_CUDA
-    if (g_cuda_enabled) { coli_cuda_free_mapped(host_ptr); return; }
-#endif
-#ifdef COLI_SYCL
-    if (g_cuda_enabled) { coli_sycl_free_mapped(host_ptr); return; }
-#endif
-#ifdef COLI_METAL
-    if (g_metal_enabled) { coli_metal_free_mapped(host_ptr); return; }
-#endif
-#ifdef COLI_VULKAN
-    if (g_cuda_enabled) { coli_vulkan_free_mapped(host_ptr); return; }
-#endif
-}
-
 #include "async_io.h"
 #include "tok.h"
 #include "tier.h"
@@ -295,6 +264,38 @@ static int g_repin;
 static uint64_t g_last_repin;
 #ifdef COLI_CUDA
 static int g_cuda_enabled;
+
+void* engine_alloc_mapped(size_t bytes, void** device_ptr) {
+#ifdef COLI_CUDA
+    if (g_cuda_enabled) return coli_cuda_alloc_mapped(bytes, device_ptr);
+#endif
+#ifdef COLI_SYCL
+    if (g_cuda_enabled) return coli_sycl_alloc_mapped(bytes, device_ptr);
+#endif
+#ifdef COLI_METAL
+    if (g_metal_enabled) return coli_metal_alloc_mapped(bytes, device_ptr);
+#endif
+#ifdef COLI_VULKAN
+    if (g_cuda_enabled) return coli_vulkan_alloc_mapped(bytes, device_ptr);
+#endif
+    return NULL;
+}
+
+void engine_free_mapped(void* host_ptr) {
+#ifdef COLI_CUDA
+    if (g_cuda_enabled) { coli_cuda_free_mapped(host_ptr); return; }
+#endif
+#ifdef COLI_SYCL
+    if (g_cuda_enabled) { coli_sycl_free_mapped(host_ptr); return; }
+#endif
+#ifdef COLI_METAL
+    if (g_metal_enabled) { coli_metal_free_mapped(host_ptr); return; }
+#endif
+#ifdef COLI_VULKAN
+    if (g_cuda_enabled) { coli_vulkan_free_mapped(host_ptr); return; }
+#endif
+}
+
 static double g_cuda_expert_gb;
 static int g_cuda_expert_auto;
 static int g_cuda_dense;
