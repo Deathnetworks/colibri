@@ -3165,10 +3165,10 @@ static void layer_forward_rows(Model *m, Layer *l, int li, float *x, int S, int 
     if (g_cuda_enabled) coli_cuda_pipe_sync(0); /* Sync stream */
 #endif
 #ifdef COLI_SYCL
-    coli_sycl_pipe_sync(0);
+    if (g_cuda_enabled) coli_sycl_pipe_sync(0);
 #endif
 #ifdef COLI_VULKAN
-    coli_vulkan_pipe_sync(0);
+    if (g_cuda_enabled) coli_vulkan_pipe_sync(0);
 #endif
 
     /* Apply Attention residual */
