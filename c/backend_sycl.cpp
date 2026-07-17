@@ -58,13 +58,21 @@ namespace sycl {
         void parallel_for(nd_range<dim> r, Func f) {}
     };
     
+    namespace access { enum class decorated { no, yes }; enum class fence_space { local_space }; }
+
     template<typename T, int dim=1> struct local_accessor {
         template<typename H> local_accessor(range<dim>, H&) {}
         T& operator[](size_t) { static T dummy; return dummy; }
-        T* get_pointer() const { return nullptr; }
+
+        template<access::decorated D = access::decorated::no>
+        struct MultiPtr {
+            T* get() const { return nullptr; }
+        };
+
+        template<access::decorated D = access::decorated::no>
+        MultiPtr<D> get_multi_ptr() const { return {}; }
     };
     
-    namespace access { enum class fence_space { local_space }; }
     
     template<typename T=void> struct plus { 
         T operator()(T a, T b) const { return a + b; } 
@@ -208,9 +216,18 @@ extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_mem_info(int device, size_t *free_b
     // e.g., ctx->q->get_device().get_info<sycl::ext::intel::info::device::free_memory>();
     // For universal compatibility, if it fails or is unavailable, we look at CUDA_EXPERT_GB.
 
+#if defined(_MSC_VER)
+    char* env_gb = nullptr;
+    size_t env_sz = 0;
+    _dupenv_s(&env_gb, &env_sz, "CUDA_EXPERT_GB");
+#else
     const char* env_gb = std::getenv("CUDA_EXPERT_GB");
+#endif
     if (env_gb) {
         double val = std::atof(env_gb);
+#if defined(_MSC_VER)
+        free(env_gb);
+#endif
         if (val > 0) {
             size_t gb = (size_t)(val * 1024 * 1024 * 1024);
             *free_bytes = gb;
@@ -728,7 +745,7 @@ static void attention_absorb_batch_kernel(sycl::queue &q, float *ctx, const floa
             
             if (s >= S || nt < 1) return;
             
-            float* qa = sm.get_pointer();
+            float* qa = sm.template get_multi_ptr<sycl::access::decorated::no>().get();
             float* cl = qa + K;
             float* scores = cl + K;
             
