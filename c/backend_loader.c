@@ -1151,4 +1151,18 @@ int coli_vulkan_tensor_update(ColiVulkanTensor *tensor, const void *weights, con
 }
 
 
+void* coli_sycl_alloc_mapped(size_t bytes, void** device_ptr) {
+    if(!g_sycl.dll) return NULL;
+    return g_sycl.alloc_mapped(bytes, device_ptr);
+}
+void coli_sycl_free_mapped(void* host_ptr) {
+    if(g_sycl.dll) g_sycl.free_mapped(host_ptr);
+}
+void* coli_vulkan_alloc_mapped(size_t bytes, void** device_ptr) {
+    if(!g_vulkan.dll) return NULL;
+    return g_vulkan.alloc_mapped(bytes, device_ptr);
+}
+void coli_vulkan_free_mapped(void* host_ptr) {
+    if(g_vulkan.dll) g_vulkan.free_mapped(host_ptr);
+}
 #endif /* _WIN32 */
