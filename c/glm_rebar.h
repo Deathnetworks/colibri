@@ -1,4 +1,3 @@
-extern int g_cuda_enabled;
 #ifndef GLM_REBAR_H
 #define GLM_REBAR_H
 #include <stddef.h>

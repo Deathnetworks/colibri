@@ -262,7 +262,7 @@ static void hwinfo_emit(Model *m);
 static int g_repin;
 static uint64_t g_last_repin;
 #ifdef COLI_CUDA
-static int g_cuda_enabled;
+int g_cuda_enabled;
 static double g_cuda_expert_gb;
 static int g_cuda_expert_auto;
 static int g_cuda_dense;
