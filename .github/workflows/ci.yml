@@ -47,7 +47,7 @@ jobs:
 
           source /opt/intel/oneapi/setvars.sh
 
-          icpx -fsycl -O3 -shared -DCOLI_SYCL_BUILDING_DLL backend_sycl.cpp -o /dev/null
+          icpx -fsycl -O3 -shared -fPIC -DCOLI_SYCL_BUILDING_DLL backend_sycl.cpp -o /dev/null
 
           echo "SYCL syntax check passed"
 
