@@ -265,6 +265,16 @@ static uint64_t g_last_repin;
 #ifdef COLI_CUDA
 static int g_cuda_enabled;
 
+void* coli_cuda_alloc_mapped(size_t bytes, void** device_ptr);
+void* coli_sycl_alloc_mapped(size_t bytes, void** device_ptr);
+void* coli_metal_alloc_mapped(size_t bytes, void** device_ptr);
+void* coli_vulkan_alloc_mapped(size_t bytes, void** device_ptr);
+
+void coli_cuda_free_mapped(void* host_ptr);
+void coli_sycl_free_mapped(void* host_ptr);
+void coli_metal_free_mapped(void* host_ptr);
+void coli_vulkan_free_mapped(void* host_ptr);
+
 void* engine_alloc_mapped(size_t bytes, void** device_ptr) {
 #ifdef COLI_CUDA
     if (g_cuda_enabled) return coli_cuda_alloc_mapped(bytes, device_ptr);
