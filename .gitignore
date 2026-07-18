@@ -69,3 +69,4 @@ c/tests/test_i4_acc512
 c/tests/test_idot
 /mingw64
 c/nul
+c/tests/test_uring

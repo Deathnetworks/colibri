@@ -39,14 +39,15 @@ Format: `VAR` — default — effect.
 | `COLI_METAL_GEMM_MIN` | `16` | Minimum matmul rows to dispatch a GEMM to the GPU (below this, stays on CPU). |
 | `COLI_METAL_SPIN` | off | Keep a GPU keep-alive spinner running (reduces dispatch latency; costs power). |
 | `PIPE` | `0` (off) | Overlap expert disk-load with matmul via I/O worker threads. Byte-identical output; reorders I/O. `PIPE=1` opts in. |
-| `PIPE_WORKERS` | `8` | Number of I/O worker threads when `PIPE=1`. Tune to your SSD (fewer avoids over-subscribing cores). |
+| `PIPE_WORKERS` | `8` | Number of pthread loaders when `PIPE=1`, or the io-wq worker maximum per ring when `URING=1` (capped at 64). Tune to SSD queue depth and available cores. |
+| `URING` | `0` (off) | Linux-only queued expert I/O. `URING=1` implies `PIPE=1`, forces cold reads through io-wq (`IOSQE_ASYNC`), replaces blocking loader pthreads and spin waits with batched SQEs/CQEs, and batches `PILOT_REAL` loads on a separate ring. Use `DIRECT=1` for cold NVMe to avoid page-cache copy/readahead limits. Fails clearly if the kernel denies io_uring; incompatible with `COLI_MMAP=1`. |
 | `DIRECT` | `0` (off) | Use `O_DIRECT`/unbuffered reads for expert slabs. Helps sustained NVMe; keeps the zero-copy GPU path. |
 | `COLI_NO_OMP_TUNE` | off | **Kill-switch** for the OpenMP hot-thread tuning (`OMP_WAIT_POLICY=active` spin + proc-bind). Set `=1` when the CPU is mostly waiting on the GPU (Metal) so spin doesn't steal the shared power budget. |
 | `MLOCK` | `-1` (auto: on for macOS) | Wire the streamed expert cache into physical RAM (`mlock`) to dodge the memory compressor. `0` off, `1` force. |
 | `CAP_RAISE` | `1` (on) | Let the engine raise the expert-cache cap above `topk` when RAM allows (bigger batches). `0` fixes the cap. |
 | `PREFETCH` | `0` | Prefetch depth for streamed experts. |
 | `COLI_MMAP` | `0` | `mmap` the weights instead of read()-ing into slabs. |
-| `PIN` | unset | Path to a `.coli_usage` file; pins the hottest experts into a resident "hot store" at startup. |
+| `PIN` | unset | Path to a `.coli_usage`/stats file; pins the hottest experts into a resident "hot store" at startup. **`PIN=auto`** seeds from the model dir's live `.coli_usage` (appended after every turn, so each restart's pin placement follows the accumulated real workload) with `stats.txt` as the fallback for a virgin model dir; neither present → no pin this run. |
 | `PIN_GB` | `10.0` | Size budget (GB) for the pinned hot store when `PIN` is set. |
 | `AUTOPIN` | `1` (on) | Auto-pin the hot store from usage history once ≥5000 selections are recorded. |
 | `REPIN` | `0` (off) | Live re-pin the hot store every N emitted tokens (RFC). |
