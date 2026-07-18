@@ -112,3 +112,5 @@ COLI_VULKAN_DLLEXPORT int coli_vulkan_pipe_sync(int device);
 #endif
 
 #endif
+COLI_VULKAN_DLLEXPORT void* coli_vulkan_alloc_mapped(size_t bytes, void** device_ptr);
+COLI_VULKAN_DLLEXPORT void coli_vulkan_free_mapped(void* host_ptr);

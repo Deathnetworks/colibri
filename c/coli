@@ -348,6 +348,11 @@ def stream_turn(p, sentinel, on_bytes):
         b=p.stdout.read(1)
         if b==b"": return None
         pend+=b
+        if pend.endswith(b"TIERS "):
+            # Eat the whole TIERS line
+            line = p.stdout.readline()
+            pend = b""
+            continue
         if pend.endswith(sentinel):
             rest=pend[:-len(sentinel)]
             if rest: on_bytes(rest)
