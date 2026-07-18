@@ -688,14 +688,6 @@ int coli_sycl_tensor_device(const ColiSyclTensor *tensor){
 }
 
 /* ---- #111 pipeline wrappers ---- */
-void* coli_cuda_alloc_mapped(size_t bytes, void** device_ptr) {
-    if(!g_cuda.dll) return NULL;
-    return g_cuda.alloc_mapped(bytes, device_ptr);
-}
-void coli_cuda_free_mapped(void* host_ptr) {
-    if(g_cuda.dll) g_cuda.free_mapped(host_ptr);
-}
-
 
 
 /* ---- #111 pipeline wrappers (see header for semantics) ---- */
@@ -1048,14 +1040,6 @@ int coli_vulkan_tensor_device(const ColiVulkanTensor *tensor){
 }
 
 /* ---- #111 pipeline wrappers ---- */
-void* coli_cuda_alloc_mapped(size_t bytes, void** device_ptr) {
-    if(!g_cuda.dll) return NULL;
-    return g_cuda.alloc_mapped(bytes, device_ptr);
-}
-void coli_cuda_free_mapped(void* host_ptr) {
-    if(g_cuda.dll) g_cuda.free_mapped(host_ptr);
-}
-
 
 
 /* ---- #111 pipeline wrappers (see header for semantics) ---- */
