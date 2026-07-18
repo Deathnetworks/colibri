@@ -12,6 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install liburing-dev
+        run: sudo apt-get update && sudo apt-get install -y liburing-dev
       - name: Build glm
         run: cd c && make glm
       - name: C test suite
