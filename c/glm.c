@@ -3429,12 +3429,7 @@ static void moe(Model *m, Layer *l, int layer, float *x, int S, float *out, int 
         int dev_rows[COLI_CUDA_MAX_DEVICES][64],dev_which[COLI_CUDA_MAX_DEVICES][64]; (void)dev_rows; (void)dev_which;
         int dev_nc[COLI_CUDA_MAX_DEVICES]={0},dev_total[COLI_CUDA_MAX_DEVICES]={0}; (void)dev_nc; (void)dev_total;
         int dev_off[COLI_CUDA_MAX_DEVICES]={0},dev_ok[COLI_CUDA_MAX_DEVICES]={0}; (void)dev_off; (void)dev_ok;
-        ColiCudaTensor *dev_g[COLI_CUDA_MAX_DEVICES][64],*dev_u[COLI_CUDA_MAX_DEVICES][64];
-        ColiCudaTensor *dev_d[COLI_CUDA_MAX_DEVICES][64];
-        int dev_rows[COLI_CUDA_MAX_DEVICES][64],dev_which[COLI_CUDA_MAX_DEVICES][64];
-        int dev_nc[COLI_CUDA_MAX_DEVICES]={0},dev_total[COLI_CUDA_MAX_DEVICES]={0};
-        int dev_off[COLI_CUDA_MAX_DEVICES]={0},dev_ok[COLI_CUDA_MAX_DEVICES]={0};
-        double dev_time[COLI_CUDA_MAX_DEVICES]={0};
+        double dev_time[COLI_CUDA_MAX_DEVICES]={0}; (void)dev_time;
         for(int di=0;di<g_cuda_ndev;di++) for(int q=0;q<ngroup;q++)
             if(group_e[q]->g.cuda_device==g_cuda_devices[di]) dev_total[di]+=group_n[q];
         for(int di=1;di<g_cuda_ndev;di++) dev_off[di]=dev_off[di-1]+dev_total[di-1];
