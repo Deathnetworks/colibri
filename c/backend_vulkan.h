@@ -107,10 +107,10 @@ COLI_VULKAN_DLLEXPORT int coli_vulkan_attention_project_batch_dev_out(ColiVulkan
         int S,int H,int Q,int R,int V,int K,int T,float scale);
 COLI_VULKAN_DLLEXPORT int coli_vulkan_pipe_sync(int device);
 
+COLI_VULKAN_DLLEXPORT void* coli_vulkan_alloc_mapped(size_t bytes, void** device_ptr);
+COLI_VULKAN_DLLEXPORT void coli_vulkan_free_mapped(void* host_ptr);
 #ifdef __cplusplus
 }
 #endif
 
 #endif
-COLI_VULKAN_DLLEXPORT void* coli_vulkan_alloc_mapped(size_t bytes, void** device_ptr);
-COLI_VULKAN_DLLEXPORT void coli_vulkan_free_mapped(void* host_ptr);

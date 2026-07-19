@@ -141,5 +141,3 @@ int coli_metal_moe_block_end(ColiMetalMoeHandle *h, float *out);
 #endif
 
 #endif
-COLI_METAL_DLLEXPORT void* coli_metal_alloc_mapped(size_t bytes, void** device_ptr);
-COLI_METAL_DLLEXPORT void coli_metal_free_mapped(void* host_ptr);

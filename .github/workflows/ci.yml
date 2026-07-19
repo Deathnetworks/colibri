@@ -12,30 +12,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install liburing-dev
+      - name: Install dependencies
         run: sudo apt-get update && sudo apt-get install -y liburing-dev
       - name: Build glm
         run: cd c && make glm
       - name: C test suite
         run: cd c && make test-c
-
-  engine-sycl-syntax:
-    name: SYCL syntax check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Intel oneAPI DPC++ compiler
-        run: |
-          wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
-          sudo apt update
-          sudo apt install -y intel-oneapi-compiler-dpcpp-cpp
-      - name: Compile backend_sycl.cpp (syntax only, no GPU)
-        run: |
-          cd c
-          source /opt/intel/oneapi/setvars.sh
-          icpx -fsycl -O3 -shared -fPIC -DCOLI_SYCL_BUILDING_DLL backend_sycl.cpp -o /dev/null
-          echo "SYCL syntax check passed"
 
   engine-cuda-syntax:
     name: CUDA syntax check
@@ -60,6 +42,45 @@ jobs:
           nvcc -O2 -std=c++17 -arch=sm_80 -c backend_cuda.cu -o /dev/null \
             -Xcompiler=-Wall,-Wextra
           echo "CUDA syntax check passed"
+
+  engine-sycl-syntax:
+    name: SYCL syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y liburing-dev wget gpg
+      - name: Install Intel oneAPI compiler
+        run: |
+          wget -O- https://apt.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB | gpg --dearmor | sudo tee /usr/share/keyrings/oneapi-archive-keyring.gpg > /dev/null
+          echo "deb [signed-by=/usr/share/keyrings/oneapi-archive-keyring.gpg] https://apt.repos.intel.com/oneapi all main" | sudo tee /etc/apt/sources.list.d/oneAPI.list
+          sudo apt-get update
+          sudo apt-get install -y intel-oneapi-compiler-dpcpp-cpp
+      - name: Compile backend_sycl.cpp (syntax only, no GPU)
+        run: |
+          source /opt/intel/oneapi/setvars.sh
+          cd c
+          icpx -fsycl -fsyntax-only -std=c++17 backend_sycl.cpp
+          echo "SYCL syntax check passed"
+
+  engine-vulkan-syntax:
+    name: Vulkan syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y liburing-dev wget gnupg2
+      - name: Install Vulkan SDK
+        run: |
+          wget -qO - https://packages.lunarg.com/lunarg-signing-key-pub.asc | sudo apt-key add -
+          sudo wget -qO /etc/apt/sources.list.d/lunarg-vulkan-noble.list http://packages.lunarg.com/vulkan/lunarg-vulkan-noble.list
+          sudo apt-get update
+          sudo apt-get install -y vulkan-sdk
+      - name: Compile backend_vulkan.cpp (syntax only, no GPU)
+        run: |
+          cd c
+          g++ -fsyntax-only -std=c++17 -I/usr/include/vulkan backend_vulkan.cpp
+          echo "Vulkan syntax check passed"
 
   web:
     name: Web UI

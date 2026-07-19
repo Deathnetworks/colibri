@@ -235,39 +235,6 @@ $env:COLI_CUDA="1"; $env:COLI_GPU="0"; $env:CUDA_EXPERT_GB="8"
 python coli chat --model D:\glm52_i4 --topp 0.7
 ```
 
-
-**Intel SYCL GPU (optional, via runtime DLL):** similar to CUDA, the SYCL backend is built as a standalone DLL (`coli_sycl.dll`) using the Intel oneAPI compiler, and loaded dynamically.
-
-```powershell
-# Prerequisites: Intel oneAPI Base Toolkit installed.
-# Build the DLL using the provided PowerShell script which calls setvars.bat:
-cd c
-.\build_backends.ps1 -Sycl
-
-# Build the host with the runtime loader (SYCL_DLL=1 adds -DCOLI_SYCL and links backend_loader.o):
-make glm.exe SYCL_DLL=1 ARCH=native
-
-# Run with the GPU expert tier (8 GB VRAM budget here; scale to your free VRAM):
-$env:COLI_SYCL="1"; $env:COLI_GPU="0"; $env:CUDA_EXPERT_GB="8"
-python coli chat --model D:\glm52_i4 --topp 0.7
-```
-
-**Vulkan GPU (optional, via runtime DLL):** the Vulkan backend is built as a standalone DLL (`coli_vulkan.dll`) using MSVC and the Vulkan SDK.
-
-```powershell
-# Prerequisites: Vulkan SDK + MSVC Build Tools (cl.exe) on PATH.
-# Build the DLL using the provided PowerShell script from a shell with the MSVC environment set:
-cd c
-.\build_backends.ps1 -Vulkan
-
-# Build the host with the runtime loader (VULKAN_DLL=1 adds -DCOLI_VULKAN and links backend_loader.o):
-make glm.exe VULKAN_DLL=1 ARCH=native
-
-# Run with the GPU expert tier (8 GB VRAM budget here; scale to your free VRAM):
-$env:COLI_VULKAN="1"; $env:COLI_GPU="0"; $env:CUDA_EXPERT_GB="8"
-python coli chat --model D:\glm52_i4 --topp 0.7
-```
-
 The DLL exports 11 `extern "C"` symbols (`coli_cuda_init`, `coli_cuda_matmul`,
 etc.); `backend_loader.c` resolves them via `GetProcAddress` on first use.
 `ColiCudaTensor*` is opaque to the host (stored, never dereferenced), so the
