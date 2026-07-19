@@ -68,6 +68,11 @@ COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_batch(ColiCudaTensor *kv_b,C
                                       const float *rope,int S,int H,int Q,int R,
                                       int V,int K,int T,float attention_scale);
 
+COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_ragged(ColiCudaTensor *kv_b,ColiCudaTensor *o_proj,
+                                      float *out,const float *q,const void *const *keys,
+                                      const float *const *latent,const float *const *rope,
+                                      const int *lengths,int S,int H,int Q,int R,int V,int K,int T,float scale);
+
 COLI_SYCL_DLLEXPORT void coli_sycl_tensor_free(ColiCudaTensor *tensor);
 COLI_SYCL_DLLEXPORT size_t coli_sycl_tensor_bytes(const ColiCudaTensor *tensor);
 COLI_SYCL_DLLEXPORT int coli_sycl_tensor_device(const ColiCudaTensor *tensor);

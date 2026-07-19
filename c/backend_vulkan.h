@@ -64,6 +64,11 @@ COLI_VULKAN_DLLEXPORT int coli_vulkan_attention_project_batch(ColiVulkanTensor *
                                       const float *rope,int S,int H,int Q,int R,
                                       int V,int K,int T,float attention_scale);
 
+COLI_VULKAN_DLLEXPORT int coli_vulkan_attention_project_ragged(ColiVulkanTensor *kv_b,ColiVulkanTensor *o_proj,
+                                      float *out,const float *q,const void *const *keys,
+                                      const float *const *latent,const float *const *rope,
+                                      const int *lengths,int S,int H,int Q,int R,int V,int K,int T,float scale);
+
 COLI_VULKAN_DLLEXPORT void coli_vulkan_tensor_free(ColiVulkanTensor *tensor);
 COLI_VULKAN_DLLEXPORT size_t coli_vulkan_tensor_bytes(const ColiVulkanTensor *tensor);
 COLI_VULKAN_DLLEXPORT int coli_vulkan_tensor_device(const ColiVulkanTensor *tensor);

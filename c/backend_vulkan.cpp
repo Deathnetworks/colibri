@@ -22,6 +22,7 @@ int coli_vulkan_expert_group(ColiVulkanTensor *const *gates, ColiVulkanTensor *c
 int coli_vulkan_attention_absorb(ColiVulkanTensor *kv_b,float *ctx,const float *q, const float *latent,const float *rope,int H,int Q, int R,int V,int K,int T,float attention_scale) { return 0; }
 int coli_vulkan_attention_absorb_batch(ColiVulkanTensor *kv_b,float *ctx,const float *q, const float *latent,const float *rope,int S, int H,int Q,int R,int V,int K,int T, float attention_scale) { return 0; }
 int coli_vulkan_attention_project_batch(ColiVulkanTensor *kv_b,ColiVulkanTensor *o_proj, float *out,const float *q,const float *latent, const float *rope,int S,int H,int Q,int R, int V,int K,int T,float attention_scale) { return 0; }
+int coli_vulkan_attention_project_ragged(ColiVulkanTensor *kv_b,ColiVulkanTensor *o_proj, float *out,const float *q,const void *const *keys, const float *const *latent,const float *const *rope, const int *lengths,int S,int H,int Q,int R,int V,int K,int T,float scale) { return 0; }
 void coli_vulkan_tensor_free(ColiVulkanTensor *tensor) {}
 size_t coli_vulkan_tensor_bytes(const ColiVulkanTensor *tensor) { return 0; }
 int coli_vulkan_tensor_device(const ColiVulkanTensor *tensor) { return -1; }

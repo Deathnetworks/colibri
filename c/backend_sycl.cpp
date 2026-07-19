@@ -119,12 +119,22 @@ static float weight_at(const void *weights, int fmt, size_t row, int i) {
 // Context and State Management
 // ---------------------------------------------------------------------------------
 
+struct RaggedKVEntry {
+    const void *key;
+    const float *host_l, *host_r;
+    float *latent, *rope;
+    int length, capacity, K, R;
+};
+
 struct ColiCudaTensor {
     void *weights;
     float *scales;
     size_t weight_bytes;
     int fmt, I, O, device;
     int tracked;
+    // Ragged (per-row independent KV) decode state — mirrors CUDA backend.
+    RaggedKVEntry ragged[512];
+    int ragged_count;
 };
 
 struct DeviceContext {
@@ -912,6 +922,185 @@ extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_batch_dev_out(Col
     attention_absorb_batch_kernel(*dc->q, dc->ac, q_dev, latent_dev, rope_dev, kv_b->weights, kv_b->scales, kv_b->fmt, S, H, Q, R, V, K, T, scale);
     coli_sycl_pipe_gemm(o_proj, out_dev, dc->ac, S);
     dc->q->wait();
+    return 1;
+}
+
+
+// Ragged (per-row independent KV) attention — mirrors CUDA backend's
+// attention_absorb_ragged_kernel + coli_cuda_attention_project_ragged.
+// Each row s carries its own KV length (lengths[s]) and its own latent/rope
+// pointers (paged caches), so different rows may belong to different sequences.
+static void attention_absorb_ragged_kernel(sycl::queue &q, float *ctx, const float *q_dev,
+        const float *const *latent, const float *const *rope, const int *lengths,
+        const void *weights, const float *wscale, int fmt, int S, int H, int Q, int R,
+        int V, int K, int T, float scale) {
+    size_t rb = row_bytes(fmt, K);
+    sycl::range<2> global_range(S, H * 256);
+    sycl::range<2> local_range(1, 256);
+    q.submit([&](sycl::handler& cgh) {
+        sycl::local_accessor<float, 1> sm(sycl::range<1>(2 * K + T + 256), cgh);
+        cgh.parallel_for(sycl::nd_range<2>(global_range, local_range), [=](sycl::nd_item<2> item) {
+            int s = item.get_group(0);
+            int h = item.get_group(1);
+            int tid = item.get_local_id(1);
+            int nt = lengths[s];
+            int rbase = h * (Q + V);
+            if (s >= S || nt < 1 || nt > T) return;
+            float* qa = sm.template get_multi_ptr<sycl::access::decorated::no>().get();
+            float* cl = qa + K;
+            float* scores = cl + K;
+            float* red = scores + T;
+            const float *qs = q_dev + ((size_t)s * H + h) * (Q + R);
+            const float *ls = latent[s], *rs = rope[s];
+            for (int k = tid; k < K; k += 256) {
+                float a = 0;
+                for (int d = 0; d < Q; d++)
+                    a += qs[d] * weight_at(weights, fmt, (size_t)(rbase + d) * rb, k) * (fmt ? wscale[rbase + d] : 1.f);
+                qa[k] = a;
+            }
+            item.barrier(sycl::access::fence_space::local_space);
+            for (int t = tid; t < nt; t += 256) {
+                float a = 0;
+                const float *lt = ls + (size_t)t * K;
+                const float *rt = rs + (size_t)t * R;
+                for (int k = 0; k < K; k++) a += qa[k] * lt[k];
+                for (int d = 0; d < R; d++) a += qs[Q + d] * rt[d];
+                scores[t] = a * scale;
+            }
+            item.barrier(sycl::access::fence_space::local_space);
+            float local_max = -3.402823466e+38F;
+            for (int t = tid; t < nt; t += 256) local_max = sycl::maximum<float>()(local_max, scores[t]);
+            red[tid] = local_max;
+            item.barrier(sycl::access::fence_space::local_space);
+            for (int n = 128; n > 0; n >>= 1) { if (tid < n) red[tid] = sycl::maximum<float>()(red[tid], red[tid + n]); }
+            item.barrier(sycl::access::fence_space::local_space);
+            float mx = red[0]; float local_sum = 0;
+            for (int t = tid; t < nt; t += 256) { float e = sycl::exp(scores[t] - mx); scores[t] = e; local_sum += e; }
+            red[tid] = local_sum;
+            item.barrier(sycl::access::fence_space::local_space);
+            for (int n = 128; n > 0; n >>= 1) { if (tid < n) red[tid] += red[tid + n]; }
+            float inv = 1.f / red[0];
+            item.barrier(sycl::access::fence_space::local_space);
+            for (int k = tid; k < K; k += 256) {
+                float a = 0;
+                for (int t = 0; t < nt; t++) a += scores[t] * ls[(size_t)t * K + k];
+                cl[k] = a;
+            }
+            item.barrier(sycl::access::fence_space::local_space);
+            for (int v = tid; v < V; v += 256) {
+                int row = rbase + Q + v;
+                float a = 0;
+                for (int k = 0; k < K; k++) a += cl[k] * weight_at(weights, fmt, (size_t)row * rb, k);
+                ctx[((size_t)s * H + h) * V + v] = a * (fmt ? wscale[row] : 1.f);
+            }
+        });
+    });
+    q.wait();
+}
+
+extern "C" COLI_SYCL_DLLEXPORT int coli_sycl_attention_project_ragged(ColiCudaTensor *w, ColiCudaTensor *proj,
+        float *out, const float *q, const void *const *keys,
+        const float *const *latent, const float *const *rope,
+        const int *lengths, int S, int H, int Q, int R, int V, int K, int T, float scale) {
+    if (!w || !proj || !out || !q || !keys || !latent || !rope || !lengths || S < 1 || S > 512 || T < 1 || T > 8192 ||
+        H < 1 || Q < 1 || R < 1 || V < 1 || K < 1 || K > 512 || w->I != K || w->O != H * (Q + V) ||
+        proj->device != w->device || proj->I != H * V) return 0;
+    DeviceContext *dc = find_ctx(w->device);
+    if (!dc) return 0;
+
+    float **dl = (float**)std::malloc((size_t)S * sizeof(float*));
+    float **dr = (float**)std::malloc((size_t)S * sizeof(float*));
+    int *old = (int*)std::malloc((size_t)S * sizeof(int));
+    int *add = (int*)std::malloc((size_t)S * sizeof(int));
+    int *off = (int*)std::malloc((size_t)S * sizeof(int));
+    int packed_n = 0;
+    if (!dl || !dr || !old || !add || !off) { std::free(dl); std::free(dr); std::free(old); std::free(add); std::free(off); return 0; }
+
+    for (int s = 0; s < S; s++) {
+        if (!keys[s] || lengths[s] < 1 || lengths[s] > T) { std::free(dl); std::free(dr); std::free(old); std::free(add); std::free(off); return 0; }
+        RaggedKVEntry *e = nullptr;
+        for (int i = 0; i < w->ragged_count; i++) if (w->ragged[i].key == keys[s]) { e = &w->ragged[i]; break; }
+        if (!e) {
+            if (w->ragged_count >= 512) { std::free(dl); std::free(dr); std::free(old); std::free(add); std::free(off); return 0; }
+            e = &w->ragged[w->ragged_count++]; std::memset(e, 0, sizeof(*e)); e->key = keys[s];
+        }
+        if (e->K != K || e->R != R || e->host_l != latent[s] || e->host_r != rope[s] || lengths[s] < e->length) {
+            if (e->latent) sycl::free(e->latent, *dc->q);
+            if (e->rope) sycl::free(e->rope, *dc->q);
+            e->latent = e->rope = nullptr; e->length = e->capacity = 0;
+            e->K = K; e->R = R; e->host_l = latent[s]; e->host_r = rope[s];
+        }
+        if (lengths[s] > e->capacity) {
+            int cap = (lengths[s] + 63) & ~63;
+            float *nl = sycl::malloc_device<float>(cap * K, *dc->q);
+            float *nr = sycl::malloc_device<float>(cap * R, *dc->q);
+            if (!nl || !nr) { if (nl) sycl::free(nl, *dc->q); if (nr) sycl::free(nr, *dc->q); std::free(dl); std::free(dr); std::free(old); std::free(add); std::free(off); return 0; }
+            if (e->length) {
+                dc->q->memcpy(nl, e->latent, (size_t)e->length * K * sizeof(float));
+                dc->q->memcpy(nr, e->rope, (size_t)e->length * R * sizeof(float));
+            }
+            if (e->latent) sycl::free(e->latent, *dc->q);
+            if (e->rope) sycl::free(e->rope, *dc->q);
+            e->latent = nl; e->rope = nr; e->capacity = cap;
+        }
+        dl[s] = e->latent; dr[s] = e->rope; old[s] = e->length; add[s] = lengths[s] - e->length;
+        off[s] = packed_n; packed_n += add[s] * (K + R);
+    }
+
+    size_t qb = (size_t)S * H * (Q + R) * sizeof(float);
+    size_t cb = (size_t)S * H * V * sizeof(float);
+    size_t ob = (size_t)S * proj->O * sizeof(float);
+    size_t pb = (size_t)packed_n * sizeof(float);
+    size_t desc = (size_t)S * (2 * sizeof(float*) + 4 * sizeof(int));
+
+    if (!reserve_buf(dc, &dc->aq, &dc->aq_cap, qb) || !reserve_buf(dc, &dc->ac, &dc->ac_cap, cb) ||
+        !reserve_buf(dc, &dc->y, &dc->y_cap, ob) || !reserve_buf(dc, &dc->al, &dc->al_cap, desc)) {
+        std::free(dl); std::free(dr); std::free(old); std::free(add); std::free(off); return 0;
+    }
+    // al doubles as the group descriptor buffer (pointers first, then ints)
+    char *db = (char*)dc->al;
+    float **ddl = (float**)db, **ddr = ddl + S;
+    int *dn = (int*)(ddr + S), *dold = dn + S, *dadd = dold + S, *doff = dadd + S;
+
+    float *host_kv = nullptr;
+    if (pb) host_kv = sycl::malloc_host<float>(pb, *dc->q);
+    if (pb && !host_kv) { std::free(dl); std::free(dr); std::free(old); std::free(add); std::free(off); return 0; }
+
+    if (pb) {
+        for (int s = 0; s < S; s++) if (add[s]) {
+            float *p = host_kv + off[s];
+            std::memcpy(p, latent[s] + (size_t)old[s] * K, (size_t)add[s] * K * sizeof(float));
+            std::memcpy(p + (size_t)add[s] * K, rope[s] + (size_t)old[s] * R, (size_t)add[s] * R * sizeof(float));
+        }
+        dc->q->memcpy(dc->al, host_kv, pb);
+    }
+    dc->q->memcpy(dc->aq, q, qb);
+    dc->q->memcpy(ddl, dl, (size_t)S * sizeof(float*));
+    dc->q->memcpy(ddr, dr, (size_t)S * sizeof(float*));
+    dc->q->memcpy(dn, lengths, (size_t)S * sizeof(int));
+    dc->q->memcpy(dold, old, (size_t)S * sizeof(int));
+    dc->q->memcpy(dadd, add, (size_t)S * sizeof(int));
+    dc->q->memcpy(doff, off, (size_t)S * sizeof(int));
+    dc->q->wait();
+
+    // Append new KV rows into the paged device caches (mirrors ragged_kv_append).
+    if (pb) {
+        for (int s = 0; s < S; s++) {
+            if (add[s] <= 0) continue;
+            size_t base = off[s];
+            dc->q->memcpy(dl[s] + (size_t)old[s] * K, host_kv + base, (size_t)add[s] * K * sizeof(float));
+            dc->q->memcpy(dr[s] + (size_t)old[s] * R, host_kv + base + (size_t)add[s] * K, (size_t)add[s] * R * sizeof(float));
+        }
+        dc->q->wait();
+    }
+    for (int s = 0; s < S; s++) for (int i = 0; i < w->ragged_count; i++) if (w->ragged[i].key == keys[s]) { w->ragged[i].length = lengths[s]; break; }
+
+    std::free(dl); std::free(dr); std::free(old); std::free(add); std::free(off);
+    if (host_kv) sycl::free(host_kv, *dc->q);
+
+    attention_absorb_ragged_kernel(*dc->q, dc->ac, dc->aq, ddl, ddr, dn, w->weights, w->scales, w->fmt, S, H, Q, R, V, K, T, scale);
+    coli_sycl_pipe_gemm(proj, dc->y, dc->ac, S);
+    dc->q->memcpy(out, dc->y, ob).wait();
     return 1;
 }
 
