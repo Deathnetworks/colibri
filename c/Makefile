@@ -1,3 +1,10 @@
+# Handle OS-specific /dev/null vs nul
+ifeq ($(OS),Windows_NT)
+DEV_NULL := nul
+else
+DEV_NULL := /dev/null
+endif
+
 # --- Target detection ---
 # Ask the compiler what it actually targets (rofl0r's note on #129): a gcc/clang
 # toolchain reports its target triple via `-dumpmachine`, e.g.
@@ -9,7 +16,7 @@
 # per-target below, so probe with the user's CC if they set one, else gcc
 # (present on Linux and mingw, and a clang shim on macOS).
 DETECT_CC := $(if $(filter default,$(origin CC)),gcc,$(CC))
-TRIPLET   := $(shell $(DETECT_CC) -dumpmachine 2>/dev/null)
+TRIPLET   := $(shell $(DETECT_CC) -dumpmachine 2>$(DEV_NULL))
 
 MINGW  := $(findstring mingw,$(TRIPLET))
 CYGWIN := $(findstring cygwin,$(TRIPLET))
@@ -125,6 +132,8 @@ INSTALL    ?= install
 #                   clean. See backend_loader.c and README "cuda-dll" below.
 CUDA      ?= 0
 CUDA_DLL  ?= 0
+SYCL_DLL  ?= 0
+VULKAN_DLL ?= 0
 ifneq ($(IS_WIN),)
 # the CUDA installer sets CUDA_PATH system-wide (e.g. C:\Program Files\NVIDIA
 # GPU Computing Toolkit\CUDA\v13.2); fall back to it before the POSIX default.
@@ -177,6 +186,14 @@ ifeq ($(CUDA_DLL),1)
 CFLAGS  += -DCOLI_CUDA
 CUDA_OBJ = backend_loader.o
 endif
+ifeq ($(SYCL_DLL),1)
+CFLAGS  += -DCOLI_SYCL
+CUDA_OBJ = backend_loader.o
+endif
+ifeq ($(VULKAN_DLL),1)
+CFLAGS  += -DCOLI_VULKAN
+CUDA_OBJ = backend_loader.o
+endif
 endif
 
 # Linux CUDA direct-link path (unchanged).
@@ -224,15 +241,21 @@ backend_loader.o: backend_loader.c backend_cuda.h compat.h
 # shell that has the MSVC environment set (e.g. after vcvars64.bat, or from a
 # "x64 Native Tools Command Prompt"). COLI_CUDA_BUILDING_DLL enables
 # __declspec(dllexport) so the 15 API symbols are exported.
+
+# SYCL DLL build (for Windows, via Intel oneAPI icpx)
+sycl-dll: backend_sycl.cpp backend_sycl.h
+	icpx -fsycl -O3 -shared -DCOLI_SYCL_BUILDING_DLL backend_sycl.cpp -o coli_sycl.dll
+
+# Vulkan DLL build (for Windows, via MSVC cl)
+vulkan-dll: backend_vulkan.cpp backend_vulkan.h
+	cl.exe /O2 /LD /DCOLI_VULKAN_BUILDING_DLL backend_vulkan.cpp /link /OUT:coli_vulkan.dll /LIBPATH:"$$(VULKAN_SDK)/lib" vulkan-1.lib
+
 cuda-dll: backend_cuda.cu backend_cuda.h
-	@command -v $(NVCC) >/dev/null 2>&1 || { echo "nvcc not found: set CUDA_HOME or NVCC" >&2; exit 1; }
-	@command -v cl >/dev/null 2>&1 || { echo "cl.exe (MSVC) not in PATH — run vcvars64.bat first" >&2; exit 1; }
 	$(NVCC) $(NVCCFLAGS) -shared -DCOLI_CUDA_BUILDING_DLL \
 		-L"$(CUDA_HOME)/lib/x64" -lcudart \
 		backend_cuda.cu -o coli_cuda.dll
 
 backend_cuda.o: backend_cuda.cu backend_cuda.h
-	@command -v $(NVCC) >/dev/null 2>&1 || { echo "nvcc not found: set CUDA_HOME or NVCC" >&2; exit 1; }
 	$(NVCC) $(NVCCFLAGS) -c backend_cuda.cu -o $@
 
 backend_metal.o: backend_metal.mm backend_metal.h
@@ -243,12 +266,10 @@ metal-test: tests/test_backend_metal.mm backend_metal.mm backend_metal.h
 	./backend_metal_test
 
 cuda-test: backend_cuda.cu backend_cuda.h tests/test_backend_cuda.cu
-	@command -v $(NVCC) >/dev/null 2>&1 || { echo "nvcc not found: set CUDA_HOME or NVCC" >&2; exit 1; }
 	$(NVCC) $(NVCCFLAGS) backend_cuda.cu tests/test_backend_cuda.cu -o backend_cuda_test$(EXE)
 	./backend_cuda_test$(EXE)
 
 cuda-bench: backend_cuda.cu backend_cuda.h tests/bench_tensor_core.cu
-	@command -v $(NVCC) >/dev/null 2>&1 || { echo "nvcc not found: set CUDA_HOME or NVCC" >&2; exit 1; }
 	$(NVCC) $(NVCCFLAGS) backend_cuda.cu tests/bench_tensor_core.cu -o backend_cuda_bench$(EXE)
 	./backend_cuda_bench$(EXE)
 
@@ -342,4 +363,4 @@ clean:
 
 bench: iobench$(EXE)
 	@if [ -n "$(ARGS)" ]; then ./iobench$(EXE) $(ARGS); else echo "built iobench$(EXE) — run: ./iobench$(EXE) <file> <MB> <iters> <threads> <direct 0|1>"; fi
-.PHONY: all glm cuda-test cuda-bench cuda-dll portable test-c test-python test check clean install uninstall bench
+.PHONY: all glm cuda-test cuda-bench cuda-dll sycl-dll vulkan-dll portable test-c test-python test check clean install uninstall bench

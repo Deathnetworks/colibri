@@ -144,25 +144,116 @@ def memory_available():
 
 
 def discover_gpus():
-    command = ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.free",
-               "--format=csv,noheader,nounits"]
-    try:
-        result = subprocess.run(command, text=True, capture_output=True, check=True, timeout=5)
-    except (OSError, subprocess.SubprocessError):
-        return []
     devices = []
-    import csv
-    for fields in csv.reader(result.stdout.splitlines()):
-        fields = [f.strip() for f in fields]
-        if len(fields) != 4:
-            continue
+
+    # 1. NVIDIA (via nvidia-smi)
+    try:
+        command = ["nvidia-smi", "--query-gpu=index,name,memory.total,memory.free",
+                   "--format=csv,noheader,nounits"]
+        result = subprocess.run(command, text=True, capture_output=True, check=True, timeout=5)
+        import csv
+        for fields in csv.reader(result.stdout.splitlines()):
+            fields = [f.strip() for f in fields]
+            if len(fields) != 4:
+                continue
+            try:
+                index, total, free = int(fields[0]), int(fields[2]), int(fields[3])
+                devices.append({"index": index, "name": fields[1],
+                                "total_bytes": total * 1024 * 1024,
+                                "free_bytes": free * 1024 * 1024})
+            except ValueError:
+                continue
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    nvidia_names = {d["name"] for d in devices}
+
+    # 2. Intel XPU (via sycl-ls)
+    sycl_devices = []
+    try:
+        result = subprocess.run(["sycl-ls"], text=True, capture_output=True, check=True, timeout=5)
+        xpu_index = 0
+        if devices:
+            xpu_index = max(d["index"] for d in devices) + 1
+
+        for line in result.stdout.splitlines():
+            # Example output: [ext_oneapi_level_zero:gpu:0] Intel(R) Arc(TM) Pro B70 Graphics, Intel(R) Level-Zero 1.3
+            if ":gpu:" in line.lower() and "intel" in line.lower():
+                name = line.split("]", 1)[-1].strip()
+                if name not in nvidia_names:
+                    sycl_devices.append({"index": xpu_index, "name": name,
+                                         "total_bytes": 0, "free_bytes": 0})
+                    xpu_index += 1
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    devices.extend(sycl_devices)
+    sycl_names = {d["name"] for d in sycl_devices}
+
+    # 3. Vulkan (via vulkaninfo)
+    vk_devices = []
+    try:
+        result = subprocess.run(["vulkaninfo", "--summary"], text=True, capture_output=True, check=True, timeout=5)
+        vk_index = 0
+        if devices:
+            vk_index = max(d["index"] for d in devices) + 1
+
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if line.startswith("deviceName"):
+                name = line.split("=", 1)[-1].strip()
+                if name not in nvidia_names and name not in sycl_names:
+                    vk_devices.append({"index": vk_index, "name": name,
+                                       "total_bytes": 0, "free_bytes": 0})
+                    vk_index += 1
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+    devices.extend(vk_devices)
+    vk_names = {d["name"] for d in vk_devices}
+
+    # 4. Apple Metal (via system_profiler)
+    metal_devices = []
+    if sys.platform == "darwin":
         try:
-            index, total, free = int(fields[0]), int(fields[2]), int(fields[3])
-        except ValueError:
-            continue
-        devices.append({"index": index, "name": fields[1],
-                        "total_bytes": total * 1024 * 1024,
-                        "free_bytes": free * 1024 * 1024})
+            result = subprocess.run(["system_profiler", "SPDisplaysDataType"], text=True, capture_output=True, check=True, timeout=5)
+            metal_index = 0
+            if devices:
+                metal_index = max(d["index"] for d in devices) + 1
+
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if line.startswith("Chipset Model:"):
+                    name = line.split(":", 1)[-1].strip()
+                    if name not in nvidia_names and name not in sycl_names and name not in vk_names:
+                        metal_devices.append({"index": metal_index, "name": name,
+                                              "total_bytes": 0, "free_bytes": 0})
+                        metal_index += 1
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+    devices.extend(metal_devices)
+    metal_names = {d["name"] for d in metal_devices}
+
+    # 5. Windows fallback (via wmic)
+    if sys.platform == "win32":
+        try:
+            result = subprocess.run(["wmic", "path", "win32_VideoController", "get", "name"], text=True, capture_output=True, check=True, timeout=5)
+            wmic_index = 0
+            if devices:
+                wmic_index = max(d["index"] for d in devices) + 1
+
+            lines = result.stdout.strip().splitlines()
+            if len(lines) > 1:
+                for line in lines[1:]:
+                    name = line.strip()
+                    if name and name not in nvidia_names and name not in sycl_names and name not in vk_names and name not in metal_names:
+                        devices.append({"index": wmic_index, "name": name,
+                                        "total_bytes": 0, "free_bytes": 0})
+                        wmic_index += 1
+        except (OSError, subprocess.SubprocessError):
+            pass
+
     return devices
 
 
@@ -228,6 +319,18 @@ def build_plan(model, ram_gb=0, context=4096, gpu_indices=None, vram_gb=0,
     gpus = discover_gpus() if gpus is None else gpus
     if gpu_indices is not None:
         wanted = set(gpu_indices)
+        detected_indices = {gpu["index"] for gpu in gpus}
+
+        # Inject dummy GPUs for requested indices that weren't discovered
+        for idx in wanted:
+            if idx not in detected_indices:
+                gpus.append({
+                    "index": idx,
+                    "name": f"Mock GPU {idx}",
+                    "total_bytes": 0,
+                    "free_bytes": 0
+                })
+
         gpus = [gpu for gpu in gpus if gpu["index"] in wanted]
 
     ram_budget = int(ram_gb * GB) if ram_gb > 0 else int(available_memory * 0.88)
@@ -250,11 +353,20 @@ def build_plan(model, ram_gb=0, context=4096, gpu_indices=None, vram_gb=0,
     reserve = 2 * GB
     gpu_plan = []
     safe_vram = 0
+    requested_vram = int(vram_gb * GB) if vram_gb > 0 else 0
+
     for gpu in gpus:
-        usable = max(0, gpu["free_bytes"] - reserve)
+        if gpu["free_bytes"] > 0:
+            usable = max(0, gpu["free_bytes"] - reserve)
+        else:
+            # For mock GPUs or those where we can't get free_bytes (like sycl-ls output)
+            usable = max(0, requested_vram - reserve) if requested_vram > 0 else 0
+
         safe_vram += usable
         gpu_plan.append(dict(gpu, reserve_bytes=reserve, usable_bytes=usable))
-    requested_vram = int(vram_gb * GB) if vram_gb > 0 else safe_vram
+
+    if vram_gb <= 0:
+        requested_vram = safe_vram
     # VRAM-resident experts do not need duplicate RAM backing: the checkpoint is
     # their recovery source. RAM is therefore an independent warm compute tier.
     vram_budget = min(requested_vram, safe_vram, info["expert_bytes"])
@@ -266,7 +378,7 @@ def build_plan(model, ram_gb=0, context=4096, gpu_indices=None, vram_gb=0,
     warnings = []
     if cap < 1:
         warnings.append("RAM budget cannot hold one expert slot per sparse layer")
-    if gpu_indices is not None and len(gpus) != len(set(gpu_indices)):
+    if gpu_indices is not None and any(gpu["name"].startswith("Mock GPU") for gpu in gpus):
         warnings.append("one or more requested GPUs were not detected")
     if gpus and vram_budget < requested_vram:
         warnings.append("VRAM tier was clamped by free VRAM or model expert size")
@@ -362,7 +474,7 @@ def format_plan(plan):
         lines.append(f"VRAM   {format_bytes(vram['budget_bytes'])} hot tier · "
                      f"~{vram['expert_capacity']} experts · {names}")
     else:
-        lines.append("VRAM   no NVIDIA device detected · CPU path")
+        lines.append("VRAM   no GPU detected · CPU path")
     lines.append(f"limit  {plan['expected_bottleneck']}")
     lines.extend(f"warn   {warning}" for warning in plan["warnings"])
     return "\n".join(lines)

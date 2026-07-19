@@ -10,11 +10,8 @@ desktop/src-tauri/target/
 desktop/src-tauri/gen/
 
 # binari compilati (si rigenerano con make / coli build)
-c/glm
 c/glm.exe
-c/olmoe
 c/olmoe.exe
-c/iobench
 c/iobench.exe
 c/tok_test
 c/backend_cuda.o

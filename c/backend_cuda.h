@@ -92,6 +92,8 @@ COLI_CUDA_DLLEXPORT int coli_cuda_attention_project_batch(ColiCudaTensor *kv_b,C
                                       const float *rope,int S,int H,int Q,int R,
                                       int V,int K,int T,float attention_scale);
 
+COLI_CUDA_DLLEXPORT void* coli_cuda_alloc_mapped(size_t bytes, void** device_ptr);
+COLI_CUDA_DLLEXPORT void coli_cuda_free_mapped(void* host_ptr);
 COLI_CUDA_DLLEXPORT void coli_cuda_tensor_free(ColiCudaTensor *tensor);
 COLI_CUDA_DLLEXPORT size_t coli_cuda_tensor_bytes(const ColiCudaTensor *tensor);
 COLI_CUDA_DLLEXPORT int coli_cuda_tensor_device(const ColiCudaTensor *tensor);

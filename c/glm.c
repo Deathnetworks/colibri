@@ -41,6 +41,8 @@
 #include <cpuid.h>                                /* hwinfo_emit: CPU brand string senza /proc */
 #endif
 #include "st.h"
+#include "glm_rebar.h"
+#include "async_io.h"
 #ifdef __linux__
 #include "uring.h"
 #endif
@@ -55,8 +57,63 @@
 static inline int omp_get_max_threads(void){ return 1; }
 static inline int omp_get_thread_num(void){ return 0; }
 #endif
+
+#ifdef COLI_SYCL
+#define COLI_CUDA 1
+#include "backend_sycl.h"
+#define ColiCudaTensor ColiSyclTensor
+#define COLI_CUDA_MAX_DEVICES COLI_SYCL_MAX_DEVICES
+#define coli_cuda_init coli_sycl_init
+#define coli_cuda_shutdown coli_sycl_shutdown
+#define coli_cuda_device_count coli_sycl_device_count
+#define coli_cuda_device_at coli_sycl_device_at
+#define coli_cuda_mem_info coli_sycl_mem_info
+#define coli_cuda_stats coli_sycl_stats
+#define coli_cuda_group_stats coli_sycl_group_stats
+#define coli_cuda_expert_mlp coli_sycl_expert_mlp
+#define coli_cuda_expert_group coli_sycl_expert_group
+#define coli_cuda_attention_absorb coli_sycl_attention_absorb
+#define coli_cuda_tensor_upload coli_sycl_tensor_upload
+#define coli_cuda_matmul coli_sycl_matmul
+#define coli_cuda_tensor_free coli_sycl_tensor_free
+#define coli_cuda_tensor_bytes coli_sycl_tensor_bytes
+#define coli_cuda_tensor_device coli_sycl_tensor_device
+#define coli_cuda_attention_absorb_batch coli_sycl_attention_absorb_batch
+#define coli_cuda_attention_absorb_batch_dev coli_sycl_attention_absorb_batch_dev
+#define coli_cuda_attention_absorb_kvdev coli_sycl_attention_absorb_kvdev
+#define coli_cuda_attention_project_batch coli_sycl_attention_project_batch
+#define coli_cuda_attention_project_batch_dev coli_sycl_attention_project_batch_dev
+#define coli_cuda_attention_project_batch_dev_out coli_sycl_attention_project_batch_dev_out
+#define coli_cuda_pipe_add coli_sycl_pipe_add
+#define coli_cuda_pipe_alloc coli_sycl_pipe_alloc
+#define coli_cuda_pipe_copy2d coli_sycl_pipe_copy2d
+#define coli_cuda_pipe_download coli_sycl_pipe_download
+#define coli_cuda_pipe_free coli_sycl_pipe_free
+#define coli_cuda_pipe_gemm coli_sycl_pipe_gemm
+#define coli_cuda_pipe_peer_copy coli_sycl_pipe_peer_copy
+#define coli_cuda_pipe_rmsnorm coli_sycl_pipe_rmsnorm
+#define coli_cuda_pipe_rmsnorm_s coli_sycl_pipe_rmsnorm_s
+#define coli_cuda_pipe_rope coli_sycl_pipe_rope
+#define coli_cuda_pipe_rope_base coli_sycl_pipe_rope_base
+#define coli_cuda_pipe_rows_add coli_sycl_pipe_rows_add
+#define coli_cuda_pipe_scratch coli_sycl_pipe_scratch
+#define coli_cuda_pipe_silu_mul coli_sycl_pipe_silu_mul
+#define coli_cuda_pipe_sync coli_sycl_pipe_sync
+#define coli_cuda_pipe_upload coli_sycl_pipe_upload
+#define coli_cuda_shared_mlp_w4a16 coli_sycl_shared_mlp_w4a16
+#define coli_cuda_tensor_update coli_sycl_tensor_update
+
+#define COLI_GPU_PREFIX "[XPU]"
+#define COLI_GPU_PREFIX_BARE "XPU"
+#else
+#define COLI_GPU_PREFIX "[CUDA]"
+#define COLI_GPU_PREFIX_BARE "CUDA"
+#endif
+
+#ifndef COLI_SYCL
 #ifdef COLI_CUDA
 #include "backend_cuda.h"
+#endif
 #endif
 #ifdef COLI_METAL
 #include "backend_metal.h"
@@ -216,12 +273,54 @@ static int g_repin;
 static uint64_t g_last_repin;
 #ifdef COLI_CUDA
 static int g_cuda_enabled;
+
+void* coli_cuda_alloc_mapped(size_t bytes, void** device_ptr);
+void* coli_sycl_alloc_mapped(size_t bytes, void** device_ptr);
+void* coli_metal_alloc_mapped(size_t bytes, void** device_ptr);
+void* coli_vulkan_alloc_mapped(size_t bytes, void** device_ptr);
+
+void coli_cuda_free_mapped(void* host_ptr);
+void coli_sycl_free_mapped(void* host_ptr);
+void coli_metal_free_mapped(void* host_ptr);
+void coli_vulkan_free_mapped(void* host_ptr);
+
+void* engine_alloc_mapped(size_t bytes, void** device_ptr) {
+#ifdef COLI_CUDA
+    if (g_cuda_enabled) return coli_cuda_alloc_mapped(bytes, device_ptr);
+#endif
+#ifdef COLI_SYCL
+    if (g_cuda_enabled) return coli_sycl_alloc_mapped(bytes, device_ptr);
+#endif
+#ifdef COLI_METAL
+    if (g_metal_enabled) return coli_metal_alloc_mapped(bytes, device_ptr);
+#endif
+#ifdef COLI_VULKAN
+    if (g_cuda_enabled) return coli_vulkan_alloc_mapped(bytes, device_ptr);
+#endif
+    return NULL;
+}
+
+void engine_free_mapped(void* host_ptr) {
+#ifdef COLI_CUDA
+    if (g_cuda_enabled) { coli_cuda_free_mapped(host_ptr); return; }
+#endif
+#ifdef COLI_SYCL
+    if (g_cuda_enabled) { coli_sycl_free_mapped(host_ptr); return; }
+#endif
+#ifdef COLI_METAL
+    if (g_metal_enabled) { coli_metal_free_mapped(host_ptr); return; }
+#endif
+#ifdef COLI_VULKAN
+    if (g_cuda_enabled) { coli_vulkan_free_mapped(host_ptr); return; }
+#endif
+}
+
 static double g_cuda_expert_gb;
 static int g_cuda_expert_auto;
 static int g_cuda_dense;
 static int g_cuda_release_host;
-static int g_cuda_devices[COLI_CUDA_MAX_DEVICES], g_cuda_ndev, g_cuda_rr;
-static int64_t g_cuda_dense_projected[COLI_CUDA_MAX_DEVICES];
+static int g_cuda_devices[COLI_CUDA_MAX_DEVICES] __attribute__((unused)), g_cuda_ndev __attribute__((unused)), g_cuda_rr __attribute__((unused));
+static int64_t g_cuda_dense_projected[COLI_CUDA_MAX_DEVICES] __attribute__((unused));
 static void qt_cuda_reset(QT *t){
     if(t->cuda){ coli_cuda_tensor_free(t->cuda); t->cuda=NULL; }
     t->cuda_failed=0;
@@ -238,19 +337,19 @@ static int qt_cuda_update(QT *t){
 }
 static void cuda_stats_print(void){
     size_t n=0,b=0; coli_cuda_stats(-1,&n,&b);
-    fprintf(stderr,"[CUDA] resident set: %zu tensors, %.2f GB VRAM\n",n,b/1e9);
+    fprintf(stderr, COLI_GPU_PREFIX " resident set: %zu tensors, %.2f GB VRAM\n",n,b/1e9);
     if(g_cuda_ndev>1) for(int i=0;i<g_cuda_ndev;i++){
         coli_cuda_stats(g_cuda_devices[i],&n,&b);
-        fprintf(stderr,"[CUDA]   device %d: %zu tensors, %.2f GB\n",g_cuda_devices[i],n,b/1e9);
+        fprintf(stderr, COLI_GPU_PREFIX "   device %d: %zu tensors, %.2f GB\n",g_cuda_devices[i],n,b/1e9);
     }
     uint64_t calls=0,experts=0,rows=0; double h2d=0,kernel=0,d2h=0;
     coli_cuda_group_stats(&calls,&experts,&rows,&h2d,&kernel,&d2h);
-    if(calls) fprintf(stderr,"[CUDA] expert groups: %llu call, %llu expert, %llu righe "
+    if(calls) fprintf(stderr, COLI_GPU_PREFIX " expert groups: %llu call, %llu expert, %llu righe "
         "(%.2f expert/call)%s\n",(unsigned long long)calls,(unsigned long long)experts,
         (unsigned long long)rows,(double)experts/calls,
         getenv("COLI_CUDA_PROFILE")?"; timing sotto":"");
     if(calls&&getenv("COLI_CUDA_PROFILE")) fprintf(stderr,
-        "[CUDA] expert groups timing: H2D %.1f ms | kernel %.1f ms | D2H %.1f ms\n",h2d,kernel,d2h);
+        COLI_GPU_PREFIX " expert groups timing: H2D %.1f ms | kernel %.1f ms | D2H %.1f ms\n",h2d,kernel,d2h);
 }
 static int parse_cuda_devices(const char *list, int *out){
     if(!list||!*list) return 0;
@@ -995,7 +1094,7 @@ static void matmul_qt_ex(float *y, const float *x, QT *w, int S, int allow_idot)
                             : w->fmt==1 ? (const void*)w->q8 : (const void*)w->q4;
         if(coli_cuda_matmul(&w->cuda,y,x,weights,w->s,w->fmt,S,w->I,w->O,w->cuda_device)) return;
         w->cuda_failed=1;
-        fprintf(stderr,"[CUDA] tensor [%d,%d] on device %d disabled after an error; falling back to CPU\n",
+        fprintf(stderr, COLI_GPU_PREFIX " tensor [%d,%d] on device %d disabled after an error; falling back to CPU\n",
             w->O,w->I,w->cuda_device);
     }
 #endif
@@ -1362,7 +1461,7 @@ static QT qt_load(Model *m, const char *name, int O, int I, int bits){
 #ifdef COLI_CUDA
     if(g_cuda_enabled&&g_cuda_dense){
         t.cuda_eligible=1;
-        int slot=g_cuda_rr++%g_cuda_ndev; t.cuda_device=g_cuda_devices[slot];
+        int slot=g_cuda_rr++%g_cuda_ndev; t.cuda_device=g_cuda_devices[slot]; (void)slot;
         g_cuda_dense_projected[slot]+=qt_bytes(&t);
     }
 #endif
@@ -1647,7 +1746,7 @@ static int expert_load(Model *m, int layer, int eid, ESlot *s, int fatal){
     Cfg *c=&m->c; int I=c->moe_inter, D=c->hidden, b=m->ebits;
     char nm[3][288]; const char *suf[3]={"gate_proj","up_proj","down_proj"};
     for(int k=0;k<3;k++) snprintf(nm[k],sizeof(nm[k]),"model.layers.%d.mlp.experts.%d.%s.weight",layer,eid,suf[k]);
-    char qn[300]; snprintf(qn,sizeof(qn),"%s.qs",nm[0]);
+    char qn[1024]; snprintf(qn,sizeof(qn),"%s.qs",nm[0]);
     if(!st_has(&m->S,qn)){                       /* fallback: tensori pieni, quantizza a runtime.
                                                   * Reachable ONLY for unquantized models (no .qs);
                                                   * GLM always has .qs, so the pilot never hits it. */
@@ -3106,18 +3205,18 @@ static void moe(Model *m, Layer *l, int layer, float *x, int S, float *out, int 
             m->t_emm += now_s()-t0;
         }
 #ifdef COLI_CUDA
-        ColiCudaTensor *dev_g[COLI_CUDA_MAX_DEVICES][64],*dev_u[COLI_CUDA_MAX_DEVICES][64];
-        ColiCudaTensor *dev_d[COLI_CUDA_MAX_DEVICES][64];
-        int dev_rows[COLI_CUDA_MAX_DEVICES][64],dev_which[COLI_CUDA_MAX_DEVICES][64];
-        int dev_nc[COLI_CUDA_MAX_DEVICES]={0},dev_total[COLI_CUDA_MAX_DEVICES]={0};
-        int dev_off[COLI_CUDA_MAX_DEVICES]={0},dev_ok[COLI_CUDA_MAX_DEVICES]={0};
+        ColiCudaTensor *dev_g[COLI_CUDA_MAX_DEVICES][64],*dev_u[COLI_CUDA_MAX_DEVICES][64]; (void)dev_g; (void)dev_u;
+        ColiCudaTensor *dev_d[COLI_CUDA_MAX_DEVICES][64]; (void)dev_d;
+        int dev_rows[COLI_CUDA_MAX_DEVICES][64],dev_which[COLI_CUDA_MAX_DEVICES][64]; (void)dev_rows; (void)dev_which;
+        int dev_nc[COLI_CUDA_MAX_DEVICES]={0},dev_total[COLI_CUDA_MAX_DEVICES]={0}; (void)dev_nc; (void)dev_total;
+        int dev_off[COLI_CUDA_MAX_DEVICES]={0},dev_ok[COLI_CUDA_MAX_DEVICES]={0}; (void)dev_off; (void)dev_ok;
         for(int di=0;di<g_cuda_ndev;di++) for(int q=0;q<ngroup;q++)
             if(group_e[q]->g.cuda_device==g_cuda_devices[di]) dev_total[di]+=group_n[q];
         for(int di=1;di<g_cuda_ndev;di++) dev_off[di]=dev_off[di-1]+dev_total[di-1];
         for(int di=0;di<g_cuda_ndev;di++){
             int cursor=0,device=g_cuda_devices[di];
             for(int q=0;q<ngroup;q++) if(group_e[q]->g.cuda_device==device){
-                int nc=dev_nc[di]++; ESlot *e=group_e[q];
+                int nc=dev_nc[di]++; ESlot *e=group_e[q]; (void)nc;
                 dev_g[di][nc]=e->g.cuda; dev_u[di][nc]=e->u.cuda; dev_d[di][nc]=e->d.cuda;
                 dev_rows[di][nc]=group_n[q]; dev_which[di][nc]=q;
                 for(int r=0;r<group_n[q];r++) memcpy(group_x+(int64_t)(dev_off[di]+cursor+r)*D,
@@ -4387,7 +4486,7 @@ static void run_replay(Model *m, const int *full, int nfull, int np){
         steps,dt,steps/dt,tot?100.0*m->hits/tot:0.0);
     profile_print(m,dt);
 #ifdef COLI_CUDA
-    if(m->gpu_expert_count) printf("CUDA expert tier: %d resident experts (%.2f GB) | %llu calls served from VRAM\n",
+    if(m->gpu_expert_count) printf("%s expert tier: %d resident experts (%.2f GB) | %llu calls served from VRAM\n", COLI_GPU_PREFIX_BARE,
         m->gpu_expert_count,m->gpu_expert_bytes/1e9,(unsigned long long)m->gpu_expert_calls);
     if(g_cuda_enabled) cuda_stats_print();
 #endif
@@ -4464,7 +4563,7 @@ static void run_text(Model *m, const char *snap, const char *prompt, int ngen){
         (unsigned long long)m->ld_main, m->bytes_main/1e9,
         (m->bytes_mtp+m->bytes_main)?100.0*m->bytes_mtp/(m->bytes_mtp+m->bytes_main):0.0);
 #ifdef COLI_CUDA
-    if(m->gpu_expert_count) printf("CUDA expert tier: %d resident experts (%.2f GB) | %llu calls served from VRAM\n",
+    if(m->gpu_expert_count) printf("%s expert tier: %d resident experts (%.2f GB) | %llu calls served from VRAM\n", COLI_GPU_PREFIX_BARE,
         m->gpu_expert_count,m->gpu_expert_bytes/1e9,(unsigned long long)m->gpu_expert_calls);
     if(g_cuda_enabled) cuda_stats_print();
 #endif
@@ -5481,8 +5580,8 @@ static void pin_load(Model *m, const char *statspath, double gb){
     for(int i=0;i<=c->n_layers;i++) m->npin[i]=cnt_l[i];
     double t0=now_s();
 #ifdef COLI_CUDA
-    double remaining[COLI_CUDA_MAX_DEVICES]={0}, placed_b[COLI_CUDA_MAX_DEVICES]={0};
-    int placed_n[COLI_CUDA_MAX_DEVICES]={0}, gpu_prefix=0;
+    double remaining[COLI_CUDA_MAX_DEVICES]={0}, placed_b[COLI_CUDA_MAX_DEVICES]={0}; (void)remaining; (void)placed_b;
+    int placed_n[COLI_CUDA_MAX_DEVICES]={0}, gpu_prefix=0; (void)placed_n;
     double budget=g_cuda_expert_gb*1e9, safe_total=0;
     if(g_cuda_enabled&&(g_cuda_expert_gb>0||g_cuda_expert_auto)) for(int i=0;i<g_cuda_ndev;i++){
         size_t free_b=0,total_b=0;
@@ -5510,7 +5609,7 @@ static void pin_load(Model *m, const char *statspath, double gb){
             { ESlot *s=&m->pin[li][slot_of[a]];
                 int64_t need=qt_bytes(&s->g)+qt_bytes(&s->u)+qt_bytes(&s->d);
                 if(m->gpu_expert_bytes+need>budget) break;
-                int tried[COLI_CUDA_MAX_DEVICES]={0}, placed=0;
+                int tried[COLI_CUDA_MAX_DEVICES]={0}, placed=0; (void)tried;
                 for(int attempt=0;attempt<g_cuda_ndev && !placed;attempt++){
                     int best=-1;
                     for(int i=0;i<g_cuda_ndev;i++) if(!tried[i] && remaining[i]>=need &&
@@ -5535,9 +5634,9 @@ static void pin_load(Model *m, const char *statspath, double gb){
                 }
             }
         }
-        fprintf(stderr,"[CUDA] hot expert tier: %d/%d experts, VRAM %.2f GB (total budget %.1f GB)\n",
+        fprintf(stderr, COLI_GPU_PREFIX " hot expert tier: %d/%d experts, VRAM %.2f GB (total budget %.1f GB)\n",
             m->gpu_expert_count,npin,m->gpu_expert_bytes/1e9,g_cuda_expert_gb);
-        for(int i=0;i<g_cuda_ndev;i++) fprintf(stderr,"[CUDA]   device %d: %d experts, %.2f GB\n",
+        for(int i=0;i<g_cuda_ndev;i++) fprintf(stderr, COLI_GPU_PREFIX "   device %d: %d experts, %.2f GB\n",
             g_cuda_devices[i],placed_n[i],placed_b[i]/1e9);
     }
 #endif
@@ -5732,7 +5831,7 @@ int main(int argc, char **argv){
      *
      * Must remain the FIRST statement in main(): argv is passed verbatim to execv(). */
     if(!getenv("COLI_OMP_TUNED") && !getenv("COLI_NO_OMP_TUNE") &&
-       !getenv("COLI_CUDA") && !getenv("COLI_METAL")){
+       !getenv("COLI_CUDA") && !getenv("COLI_SYCL") && !getenv("COLI_VULKAN") && !getenv("COLI_METAL")){
         setenv("OMP_WAIT_POLICY","active",0);  /* keep the team hot across the tiny per-expert matmul regions */
         setenv("GOMP_SPINCOUNT","200000",0);   /* spin briefly, then yield so long disk waits don't burn a core */
         setenv("OMP_PROC_BIND","close",0);     /* pack the team onto adjacent cores for cache locality */
@@ -5888,7 +5987,9 @@ int main(int argc, char **argv){
         fprintf(stderr,"KV_SLOTS must be between 1 and 16\n"); return 2;
     }
 #ifdef COLI_CUDA
-    if(getenv("COLI_CUDA") && atoi(getenv("COLI_CUDA"))){
+    if((getenv("COLI_CUDA") && atoi(getenv("COLI_CUDA"))) ||
+       (getenv("COLI_SYCL") && atoi(getenv("COLI_SYCL"))) ||
+       (getenv("COLI_VULKAN") && atoi(getenv("COLI_VULKAN")))){
         const char *one=getenv("COLI_GPU"), *many=getenv("COLI_GPUS");
         if(one&&many){ fprintf(stderr,"use COLI_GPU or COLI_GPUS, not both\n"); return 2; }
         if(many) g_cuda_ndev=parse_cuda_devices(many,g_cuda_devices);
@@ -5896,7 +5997,7 @@ int main(int argc, char **argv){
         else { g_cuda_ndev=1; g_cuda_devices[0]=0; }
         if(g_cuda_ndev<1){ fprintf(stderr,"invalid COLI_GPUS: use a list such as 0,1,2\n"); return 2; }
         g_cuda_enabled=coli_cuda_init(g_cuda_devices,g_cuda_ndev);
-        if(!g_cuda_enabled){ fprintf(stderr,"[CUDA] requested backend is unavailable\n"); return 2; }
+        if(!g_cuda_enabled){ fprintf(stderr, COLI_GPU_PREFIX " requested backend is unavailable\n"); return 2; }
     }
     g_cuda_dense=getenv("CUDA_DENSE")?atoi(getenv("CUDA_DENSE")):0;
     g_cuda_pipe=getenv("COLI_CUDA_PIPE")?atoi(getenv("COLI_CUDA_PIPE")):0;
@@ -5909,16 +6010,18 @@ int main(int argc, char **argv){
     if((getenv("COLI_GPU")||getenv("COLI_GPUS"))&&!g_cuda_enabled){ fprintf(stderr,"COLI_GPU(S) requires COLI_CUDA=1\n"); return 2; }
     if(g_cuda_dense&&!g_cuda_enabled){ fprintf(stderr,"CUDA_DENSE requires COLI_CUDA=1\n"); return 2; }
     if((g_cuda_expert_gb>0||g_cuda_expert_auto) && !g_cuda_enabled){ fprintf(stderr,"CUDA_EXPERT_GB requires COLI_CUDA=1\n"); return 2; }
-    if(g_cuda_enabled) fprintf(stderr,"[CUDA] mode: routed experts%s%s\n",
+    if(g_cuda_enabled) fprintf(stderr, COLI_GPU_PREFIX " mode: routed experts%s%s\n",
         g_cuda_dense?" + resident dense tensors":" only (resident dense on CPU)",
         g_cuda_release_host?"; VRAM experts without host backing":"");
 #else
     if((getenv("COLI_CUDA") && atoi(getenv("COLI_CUDA"))) ||
+       (getenv("COLI_SYCL") && atoi(getenv("COLI_SYCL"))) ||
+       (getenv("COLI_VULKAN") && atoi(getenv("COLI_VULKAN"))) ||
        getenv("COLI_GPU") || getenv("COLI_GPUS") ||
        (getenv("CUDA_DENSE") && atoi(getenv("CUDA_DENSE"))) ||
         (getenv("CUDA_EXPERT_GB") &&
         (!strcmp(getenv("CUDA_EXPERT_GB"),"auto")||atof(getenv("CUDA_EXPERT_GB"))>0))){
-        fprintf(stderr,"CUDA was requested, but this binary is CPU-only; rebuild with: make CUDA=1\n");
+        fprintf(stderr,"GPU was requested, but this binary is CPU-only; rebuild with: make CUDA=1, SYCL_DLL=1, or VULKAN_DLL=1\n");
         return 2;
     }
 #endif
@@ -6104,7 +6207,7 @@ int main(int argc, char **argv){
            tot?100.0*m.hits/tot:0.0, (unsigned long long)m.hits, (unsigned long long)m.miss, rss_gb(), n_new/dt);
     profile_print(&m,dt);
 #ifdef COLI_CUDA
-    if(m.gpu_expert_count) printf("CUDA expert tier: %d resident experts (%.2f GB) | %llu calls served from VRAM\n",
+    if(m.gpu_expert_count) printf("%s expert tier: %d resident experts (%.2f GB) | %llu calls served from VRAM\n", COLI_GPU_PREFIX_BARE,
         m.gpu_expert_count,m.gpu_expert_bytes/1e9,(unsigned long long)m.gpu_expert_calls);
     if(g_cuda_enabled) cuda_stats_print();
 #endif
